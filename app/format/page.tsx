@@ -120,6 +120,27 @@ export default function TournamentFormatPage() {
             Each player earns half of their team&apos;s
             rally score as tournament points.
           </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
+              <div className="font-bold text-emerald-400">
+                Prelims
+              </div>
+              <p className="mt-2 text-slate-300">
+                Played to 21. At 20-20, the next point is
+                golden, so the game ends 21-20.
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
+              <div className="font-bold text-yellow-400">
+                QF / SF / Final
+              </div>
+              <p className="mt-2 text-slate-300">
+                First to 21, must win by 2. After 20-20,
+                play continues to 22-20, 23-21, and so on,
+                until 29-29. Then 30 is golden point.
+              </p>
+            </div>
+          </div>
           <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
             <div className="font-bold text-emerald-400">
               Example: 21 - 12
