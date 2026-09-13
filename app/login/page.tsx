@@ -1,10 +1,15 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import {
+  FormEvent,
+  Suspense,
+  useEffect,
+  useState,
+} from "react";
 import { supabase } from "@/lib/supabase";
 import { useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginForm() {
   const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
@@ -94,7 +99,7 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
       <div className="w-full max-w-md">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-xl">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 sm:p-8 shadow-xl">
           <div className="mb-8 text-center">
             <div className="text-5xl">🏸</div>
 
@@ -170,7 +175,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="min-h-12 w-full rounded-lg bg-emerald-600 px-5 py-3 font-bold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading
                 ? "Please wait..."
@@ -200,3 +205,23 @@ export default function LoginPage() {
     </main>
   );
 }
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
+          <div className="text-center text-white">
+            <div className="text-4xl">🏸</div>
+            <p className="mt-3 text-slate-400">
+              Loading Baddy...
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <LoginForm />
+    </Suspense>
+  );
+}
+
