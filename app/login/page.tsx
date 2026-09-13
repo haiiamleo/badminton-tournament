@@ -2,16 +2,12 @@
 
 import {
   FormEvent,
-  Suspense,
   useEffect,
   useState,
 } from "react";
 import { supabase } from "@/lib/supabase";
-import { useSearchParams } from "next/navigation";
 
-function LoginForm() {
-  const searchParams = useSearchParams();
-
+export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -21,6 +17,18 @@ function LoginForm() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  function getRedirectPath() {
+    if (typeof window === "undefined") {
+      return "/";
+    }
+
+    const redirect = new URLSearchParams(
+      window.location.search
+    ).get("redirect");
+
+    return redirect || "/";
+  }
+
   useEffect(() => {
     const checkUser = async () => {
       const {
@@ -28,13 +36,12 @@ function LoginForm() {
       } = await supabase.auth.getUser();
 
       if (user) {
-        window.location.href =
-          searchParams.get("redirect") || "/";
+        window.location.href = getRedirectPath();
       }
     };
 
     checkUser();
-  }, [searchParams]);
+  }, []);
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>
@@ -64,8 +71,7 @@ function LoginForm() {
         }
 
         if (data.session) {
-          window.location.href =
-            searchParams.get("redirect") || "/";
+          window.location.href = getRedirectPath();
           return;
         }
 
@@ -83,8 +89,7 @@ function LoginForm() {
           throw error;
         }
 
-        window.location.href =
-          searchParams.get("redirect") || "/";
+        window.location.href = getRedirectPath();
       }
     } catch (err: any) {
       setError(
@@ -99,7 +104,7 @@ function LoginForm() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
       <div className="w-full max-w-md">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 sm:p-8 shadow-xl">
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl sm:p-8">
           <div className="mb-8 text-center">
             <div className="text-5xl">🏸</div>
 
@@ -205,23 +210,3 @@ function LoginForm() {
     </main>
   );
 }
-
-export default function LoginPage() {
-  return (
-    <Suspense
-      fallback={
-        <main className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
-          <div className="text-center text-white">
-            <div className="text-4xl">🏸</div>
-            <p className="mt-3 text-slate-400">
-              Loading Baddy...
-            </p>
-          </div>
-        </main>
-      }
-    >
-      <LoginForm />
-    </Suspense>
-  );
-}
-
