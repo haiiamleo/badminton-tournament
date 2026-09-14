@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import AppNav from "@/app/components/AppNav";
 import { deleteTournament } from "@/lib/deleteTournament";
 import {
   formatDoublesTeam,
   getDoublesFinalResult,
 } from "@/lib/finalResult";
+import { rankTeams } from "@/lib/teamTournament";
 
 type Tournament = {
   id: string;
@@ -19,6 +21,8 @@ type Tournament = {
   status: string;
   created_at: string;
   completed_at: string | null;
+  format?: string;
+  team_size?: number | null;
 };
 
 type Player = {
@@ -59,6 +63,33 @@ type MatchPlayer = {
   team_number: number;
 };
 
+type Team = {
+  id: string;
+  name: string;
+  group_name: string;
+};
+
+type TeamStanding = {
+  team_id: string;
+  matches_played: number;
+  match_wins: number;
+  match_losses: number;
+  fixture_wins: number;
+  fixture_losses: number;
+};
+
+type Fixture = {
+  id: string;
+  team1_id: string;
+  team2_id: string;
+  stage: string;
+  group_name: string | null;
+  team1_match_wins: number;
+  team2_match_wins: number;
+  winner_team_id: string | null;
+  status: string;
+};
+
 function points(value: number | null | undefined) {
   return Number(value || 0)
     .toFixed(1)
@@ -82,6 +113,10 @@ function roundName(round: Round) {
     return "Final";
   }
 
+  if (round.round_type === "third_place") {
+    return "3rd Place";
+  }
+
   return round.round_type;
 }
 
@@ -99,6 +134,11 @@ export default function HistoricalTournamentPage() {
   const [matchPlayers, setMatchPlayers] = useState<
     MatchPlayer[]
   >([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [teamStandings, setTeamStandings] = useState<TeamStanding[]>(
+    []
+  );
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -167,6 +207,49 @@ export default function HistoricalTournamentPage() {
           (standingsResponse.data || []) as Standing[]
         );
         setRounds(loadedRounds);
+
+        if (
+          (tournamentResponse.data as Tournament).format ===
+          "team_groups"
+        ) {
+          const [
+            teamsResponse,
+            teamStandingsResponse,
+            fixturesResponse,
+          ] = await Promise.all([
+            supabase
+              .from("teams")
+              .select("id,name,group_name")
+              .eq("tournament_id", tournamentId)
+              .order("seed"),
+            supabase
+              .from("team_standings")
+              .select("*")
+              .eq("tournament_id", tournamentId),
+            supabase
+              .from("fixtures")
+              .select("*")
+              .eq("tournament_id", tournamentId),
+          ]);
+
+          if (teamsResponse.error) {
+            throw teamsResponse.error;
+          }
+
+          if (teamStandingsResponse.error) {
+            throw teamStandingsResponse.error;
+          }
+
+          if (fixturesResponse.error) {
+            throw fixturesResponse.error;
+          }
+
+          setTeams((teamsResponse.data || []) as Team[]);
+          setTeamStandings(
+            (teamStandingsResponse.data || []) as TeamStanding[]
+          );
+          setFixtures((fixturesResponse.data || []) as Fixture[]);
+        }
 
         if (loadedRounds.length > 0) {
           const roundIds = loadedRounds.map(
@@ -287,12 +370,61 @@ export default function HistoricalTournamentPage() {
     [rounds, matches, matchPlayers, playerMap]
   );
 
+  const teamMap = useMemo(
+    () => new Map(teams.map((team) => [team.id, team])),
+    [teams]
+  );
+
+  const groupedTeamStandings = useMemo(() => {
+    const byGroup: Record<
+      string,
+      (TeamStanding & { team?: Team })[]
+    > = { A: [], B: [] };
+
+    teamStandings.forEach((standing) => {
+      const team = teamMap.get(standing.team_id);
+
+      if (!team) {
+        return;
+      }
+
+      byGroup[team.group_name]?.push({
+        ...standing,
+        team,
+      });
+    });
+
+    byGroup.A = rankTeams(byGroup.A);
+    byGroup.B = rankTeams(byGroup.B);
+
+    return byGroup;
+  }, [teamStandings, teamMap]);
+
+  const teamFinal = useMemo(() => {
+    const finalFixture = fixtures.find(
+      (fixture) => fixture.stage === "final" && fixture.winner_team_id
+    );
+
+    if (!finalFixture?.winner_team_id) {
+      return null;
+    }
+
+    const champions = teamMap.get(finalFixture.winner_team_id);
+    const runnersUp = teamMap.get(
+      finalFixture.winner_team_id === finalFixture.team1_id
+        ? finalFixture.team2_id
+        : finalFixture.team1_id
+    );
+
+    return {
+      champions,
+      runnersUp,
+      score: `${finalFixture.team1_match_wins} - ${finalFixture.team2_match_wins}`,
+    };
+  }, [fixtures, teamMap]);
+
   const goHistory = () => {
     window.location.href = "/tournaments";
-  };
-
-  const goFormat = () => {
-    window.location.href = "/format";
   };
 
   const goHome = () => {
@@ -359,10 +491,16 @@ export default function HistoricalTournamentPage() {
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-950 px-4 py-10 text-white">
-        <div className="mx-auto max-w-6xl rounded-2xl border border-slate-800 bg-slate-900 p-10 text-center">
-          <div className="text-4xl">🏸</div>
-          <div className="mt-4 font-bold">
-            Loading tournament...
+        <div className="mx-auto max-w-6xl">
+          <div className="mb-6 flex justify-end">
+            <AppNav links={["history"]} clearActiveOnHome />
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-10 text-center">
+            <div className="text-4xl">🏸</div>
+            <div className="mt-4 font-bold">
+              Loading tournament...
+            </div>
           </div>
         </div>
       </main>
@@ -372,23 +510,22 @@ export default function HistoricalTournamentPage() {
   if (!tournament) {
     return (
       <main className="min-h-screen bg-slate-950 px-4 py-10 text-white">
-        <div className="mx-auto max-w-3xl rounded-2xl border border-red-900 bg-slate-900 p-8 text-center">
-          <div className="text-4xl">❌</div>
+        <div className="mx-auto max-w-3xl">
+          <div className="mb-6 flex justify-end">
+            <AppNav links={["history"]} clearActiveOnHome />
+          </div>
 
-          <h1 className="mt-4 text-2xl font-black">
-            Tournament Not Found
-          </h1>
+          <div className="rounded-2xl border border-red-900 bg-slate-900 p-8 text-center">
+            <div className="text-4xl">❌</div>
 
-          <p className="mt-2 text-sm text-red-300">
-            {error || "This tournament does not exist."}
-          </p>
+            <h1 className="mt-4 text-2xl font-black">
+              Tournament Not Found
+            </h1>
 
-          <button
-            onClick={goHistory}
-            className="mt-6 rounded-xl bg-emerald-600 px-6 py-3 font-bold hover:bg-emerald-500"
-          >
-            📋 Tournament History
-          </button>
+            <p className="mt-2 text-sm text-red-300">
+              {error || "This tournament does not exist."}
+            </p>
+          </div>
         </div>
       </main>
     );
@@ -419,6 +556,12 @@ export default function HistoricalTournamentPage() {
                     </span>
 
                     <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-400">
+                      {tournament.format === "team_groups"
+                        ? `Team groups · ${tournament.team_size || 4} per team`
+                        : `${tournament.preliminary_rounds} Rounds`}
+                    </span>
+
+                    <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-400">
                       {tournament.courts} Courts
                     </span>
                   </div>
@@ -426,43 +569,24 @@ export default function HistoricalTournamentPage() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <AppNav links={["history", "format"]} clearActiveOnHome>
               <button
                 onClick={openLeaderboard}
-                className="rounded-lg border border-emerald-700 px-4 py-2 text-sm font-bold text-emerald-400 hover:bg-emerald-950"
+                className="min-h-11 rounded-lg border border-emerald-700 px-3 py-2 text-sm font-bold text-emerald-400 hover:bg-emerald-950 sm:px-4"
               >
-                📊 Leaderboard
-              </button>
-
-              <button
-                onClick={goHistory}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-800"
-              >
-                📋 History
-              </button>
-
-              <button
-                onClick={goFormat}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-800"
-              >
-                📖 Format
-              </button>
-
-              <button
-                onClick={goHome}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-800"
-              >
-                🏠 Home
+                {tournament.format === "team_groups"
+                  ? "📊 Standings"
+                  : "📊 Leaderboard"}
               </button>
 
               <button
                 onClick={removeTournament}
                 disabled={deleting}
-                className="rounded-lg border border-red-800 px-4 py-2 text-sm font-bold text-red-400 hover:bg-red-950 disabled:opacity-50"
+                className="min-h-11 rounded-lg border border-red-800 px-3 py-2 text-sm font-bold text-red-400 hover:bg-red-950 disabled:opacity-50 sm:px-4"
               >
                 {deleting ? "Deleting..." : "🗑️ Delete"}
               </button>
-            </div>
+            </AppNav>
           </div>
         </header>
 
@@ -474,7 +598,35 @@ export default function HistoricalTournamentPage() {
         )}
 
         {/* CHAMPIONS / RUNNERS UP */}
-        {finalResult && (
+        {tournament.format === "team_groups" && teamFinal?.champions && (
+          <section className="mb-8 grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/50 to-slate-950 p-8 text-center">
+              <div className="text-6xl">🏆</div>
+              <div className="mt-3 text-sm font-bold uppercase tracking-widest text-yellow-500">
+                Tournament Champions
+              </div>
+              <h2 className="mt-2 text-3xl font-black text-yellow-400">
+                {teamFinal.champions.name}
+              </h2>
+              <div className="mt-4 text-sm text-slate-400">
+                Final match wins {teamFinal.score}
+              </div>
+            </div>
+            {teamFinal.runnersUp && (
+              <div className="rounded-2xl border border-slate-600 bg-gradient-to-br from-slate-800/80 to-slate-950 p-8 text-center">
+                <div className="text-6xl">🥈</div>
+                <div className="mt-3 text-sm font-bold uppercase tracking-widest text-slate-300">
+                  Runners Up
+                </div>
+                <h2 className="mt-2 text-3xl font-black text-slate-100">
+                  {teamFinal.runnersUp.name}
+                </h2>
+              </div>
+            )}
+          </section>
+        )}
+
+        {tournament.format !== "team_groups" && finalResult && (
           <section className="mb-8 grid gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/50 to-slate-950 p-8 text-center">
               <div className="text-6xl">🏆</div>
@@ -523,10 +675,12 @@ export default function HistoricalTournamentPage() {
 
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
             <div className="text-xs text-slate-500">
-              Preliminary
+              {tournament.format === "team_groups" ? "Format" : "Preliminary"}
             </div>
             <div className="mt-1 text-2xl font-black">
-              {tournament.preliminary_rounds}
+              {tournament.format === "team_groups"
+                ? "Teams"
+                : tournament.preliminary_rounds}
             </div>
           </div>
 
@@ -551,6 +705,83 @@ export default function HistoricalTournamentPage() {
           </div>
         </section>
 
+        {tournament.format === "team_groups" ? (
+          <>
+            <section className="mb-8 grid gap-4 md:grid-cols-2">
+              {(["A", "B"] as const).map((groupName) => (
+                <div
+                  key={groupName}
+                  className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                >
+                  <h2 className="text-xl font-black">Group {groupName}</h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Ranked by match wins, then fixture wins.
+                  </p>
+                  <div className="mt-4 space-y-2">
+                    {groupedTeamStandings[groupName].map((row, index) => (
+                      <div
+                        key={row.team_id}
+                        className="flex items-center justify-between rounded-lg bg-slate-950 px-3 py-2 text-sm"
+                      >
+                        <div>
+                          <span className="mr-2 font-black text-emerald-400">
+                            {index + 1}
+                          </span>
+                          {row.team?.name}
+                        </div>
+                        <div className="text-slate-400">
+                          {row.match_wins} match wins · {row.fixture_wins}{" "}
+                          fixtures
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </section>
+
+            <section className="mb-8">
+              <div className="mb-4">
+                <h2 className="text-2xl font-black">Fixtures</h2>
+                <p className="text-sm text-slate-400">
+                  Each fixture is 5 doubles matches. Only match wins count.
+                </p>
+              </div>
+              <div className="space-y-4">
+                {fixtures.map((fixture) => {
+                  const team1 = teamMap.get(fixture.team1_id);
+                  const team2 = teamMap.get(fixture.team2_id);
+
+                  return (
+                    <article
+                      key={fixture.id}
+                      className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                    >
+                      <div className="text-xs uppercase tracking-widest text-slate-500">
+                        {fixture.stage === "group"
+                          ? `Group ${fixture.group_name}`
+                          : fixture.stage.replace("_", " ")}
+                      </div>
+                      <h3 className="mt-1 text-xl font-black">
+                        {team1?.name} vs {team2?.name}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-400">
+                        {fixture.team1_match_wins} - {fixture.team2_match_wins}{" "}
+                        match wins
+                        {fixture.winner_team_id
+                          ? ` · Winner: ${
+                              teamMap.get(fixture.winner_team_id)?.name || ""
+                            }`
+                          : ""}
+                      </p>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
         {/* FINAL LEADERBOARD */}
         <section className="mb-8">
           <div className="mb-4">
@@ -747,6 +978,8 @@ export default function HistoricalTournamentPage() {
             })}
           </div>
         </section>
+          </>
+        )}
 
         <footer className="border-t border-slate-800 py-8 text-center">
           <div className="flex flex-wrap justify-center gap-3">

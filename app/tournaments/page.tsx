@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import AppNav from "@/app/components/AppNav";
 import { deleteTournament } from "@/lib/deleteTournament";
 
 type Tournament = {
@@ -14,6 +15,8 @@ type Tournament = {
   status: string;
   created_at: string;
   completed_at: string | null;
+  format?: string;
+  team_size?: number | null;
 };
 
 function formatDate(value: string | null) {
@@ -39,7 +42,7 @@ export default function TournamentHistoryPage() {
         const { data, error: loadError } = await supabase
           .from("tournaments")
           .select(
-            "id, name, total_players, preliminary_rounds, courts, qualification_count, status, created_at, completed_at"
+            "id, name, total_players, preliminary_rounds, courts, qualification_count, status, created_at, completed_at, format, team_size"
           )
           .order("created_at", { ascending: false });
 
@@ -89,7 +92,7 @@ export default function TournamentHistoryPage() {
 
   const startNewTournament = () => {
     localStorage.removeItem("activeTournamentId");
-    window.location.href = "/";
+    window.location.href = "/?create=1";
   };
 
   const openCompletedTournament = (tournamentId: string) => {
@@ -101,6 +104,11 @@ export default function TournamentHistoryPage() {
 
     if (tournament.status === "setup") {
       window.location.href = "/";
+      return;
+    }
+
+    if (tournament.format === "team_groups") {
+      window.location.href = "/team-center";
       return;
     }
 
@@ -151,28 +159,7 @@ export default function TournamentHistoryPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={startNewTournament}
-              className="rounded-lg border border-emerald-700 px-4 py-2 text-sm font-bold text-emerald-400 hover:bg-emerald-950"
-            >
-              ➕ New Tournament
-            </button>
-
-            <button
-              onClick={goFormat}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-800"
-            >
-              📖 Format
-            </button>
-
-            <button
-              onClick={goHome}
-              className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-800"
-            >
-              🏠 Home
-            </button>
-          </div>
+          <AppNav links={["new", "format"]} />
         </header>
 
         {loading && (
@@ -227,8 +214,9 @@ export default function TournamentHistoryPage() {
                           <p className="mt-2 text-sm text-slate-400">
                             {tournament.total_players} Players
                             {" · "}
-                            {tournament.preliminary_rounds}{" "}
-                            Preliminary Rounds
+                            {tournament.format === "team_groups"
+                              ? `Team groups · ${tournament.team_size || 4} per team`
+                              : `${tournament.preliminary_rounds} Preliminary Rounds`}
                             {" · "}
                             {tournament.courts} Courts
                           </p>
@@ -274,7 +262,7 @@ export default function TournamentHistoryPage() {
                   In Progress
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Resume a live tournament in Control Center.
+                  Resume a live tournament in Control Center or Team Center.
                 </p>
               </div>
 
@@ -304,8 +292,9 @@ export default function TournamentHistoryPage() {
                           <p className="mt-2 text-sm text-slate-400">
                             {tournament.total_players} Players
                             {" · "}
-                            {tournament.preliminary_rounds}{" "}
-                            Preliminary Rounds
+                            {tournament.format === "team_groups"
+                              ? `Team groups · ${tournament.team_size || 4} per team`
+                              : `${tournament.preliminary_rounds} Preliminary Rounds`}
                             {" · "}
                             {tournament.courts} Courts
                           </p>
@@ -324,7 +313,9 @@ export default function TournamentHistoryPage() {
                           >
                             {tournament.status === "setup"
                               ? "🏠 Continue Setup"
-                              : "🎛️ Control Center"}
+                              : tournament.format === "team_groups"
+                                ? "👥 Team Center"
+                                : "🎛️ Control Center"}
                           </button>
 
                           <button

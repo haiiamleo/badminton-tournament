@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import LogoutButton from "@/app/components/LogoutButton";
+import AppNav from "@/app/components/AppNav";
 import {
   generateIntelligentPairings,
   generateRandomPairings,
@@ -15,6 +16,12 @@ import {
   scoreRuleHint,
   validateCompletedScore,
 } from "../lib/scoreValidation";
+import {
+  playerCountsForTeamSize,
+  splitIntoTeams,
+  teamLayout,
+  type TeamSize,
+} from "../lib/teamTournament";
 
 type Player = {
   id: string;
@@ -50,6 +57,8 @@ type Tournament = {
   courts: number;
   qualification_count: number;
   status: string;
+  format?: string;
+  team_size?: number | null;
 };
 
 type Round = {
@@ -106,6 +115,12 @@ export default function HomePage() {
   const [courts, setCourts] =
     useState(3);
 
+  const [tournamentFormat, setTournamentFormat] =
+    useState<"individual" | "team_groups">("individual");
+
+  const [teamSize, setTeamSize] =
+    useState<TeamSize>(4);
+
   const [playerInput, setPlayerInput] =
     useState("");
 
@@ -132,6 +147,9 @@ export default function HomePage() {
   const [deletingTournament, setDeletingTournament] =
     useState(false);
 
+  const [showCreateForm, setShowCreateForm] =
+    useState(false);
+
   /*
    * Restore the active tournament after browser refresh.
    */
@@ -142,7 +160,36 @@ export default function HomePage() {
     if (activeTournamentId) {
       loadTournamentData(activeTournamentId);
     }
+
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("create") === "1") {
+      setShowCreateForm(true);
+    }
   }, []);
+
+  useEffect(() => {
+    setManualPlayers((current) =>
+      Array.from(
+        { length: playerCount },
+        (_, index) => current[index] || ""
+      )
+    );
+
+    if (tournamentFormat === "team_groups") {
+      const options = playerCountsForTeamSize(teamSize);
+
+      if (!options.includes(playerCount)) {
+        setPlayerCount(options.includes(24) ? 24 : options[0]);
+      }
+
+      return;
+    }
+
+    if (![16, 24, 32].includes(playerCount)) {
+      setPlayerCount(24);
+    }
+  }, [tournamentFormat, teamSize, playerCount]);
 
   /*
    * Load tournament and current round.
@@ -172,13 +219,21 @@ export default function HomePage() {
           .select("*")
           .eq("tournament_id", tournamentId)
           .eq("active", true)
-          .order("name");
+          .order("seed");
 
       if (playerError) {
         throw playerError;
       }
 
       setPlayers(playerData || []);
+
+      if (tournamentData.format === "team_groups") {
+        setStandings([]);
+        setCurrentRound(null);
+        setMatches([]);
+        setMatchPlayers([]);
+        return;
+      }
 
       const { data: standingData, error: standingError } =
         await supabase
@@ -293,6 +348,7 @@ export default function HomePage() {
     }
 
     return manualPlayers
+      .slice(0, playerCount)
       .map((name) => name.trim())
       .filter(Boolean);
   }
@@ -344,11 +400,22 @@ export default function HomePage() {
         return;
       }
 
-      if (playerCount % 4 !== 0) {
+      if (tournamentFormat === "individual" && playerCount % 4 !== 0) {
         setStatus(
           "Player count must be divisible by 4."
         );
         return;
+      }
+
+      if (tournamentFormat === "team_groups") {
+        const layout = teamLayout(playerCount, teamSize);
+
+        if (!layout.valid) {
+          setStatus(
+            "Team groups need an even number of teams, at least 4, with 3 or 4 players each."
+          );
+          return;
+        }
       }
 
       /*
@@ -361,10 +428,17 @@ export default function HomePage() {
           .insert({
             name: tournamentName.trim(),
             total_players: playerCount,
-            preliminary_rounds: preliminaryRounds,
+            preliminary_rounds:
+              tournamentFormat === "team_groups"
+                ? 1
+                : preliminaryRounds,
             courts,
-            qualification_count: 16,
+            qualification_count:
+              tournamentFormat === "team_groups" ? 4 : 16,
             status: "setup",
+            format: tournamentFormat,
+            team_size:
+              tournamentFormat === "team_groups" ? teamSize : null,
           })
           .select()
           .single();
@@ -398,26 +472,80 @@ export default function HomePage() {
         );
       }
 
-      const standingRows =
-        insertedPlayers.map((player) => ({
-          tournament_id: tournamentData.id,
-          player_id: player.id,
-          matches_played: 0,
-          wins: 0,
-          losses: 0,
-          points_for: 0,
-          points_against: 0,
-          tournament_points: 0,
-          rank: null,
-        }));
+      if (tournamentFormat === "team_groups") {
+        const orderedPlayers = [...insertedPlayers].sort(
+          (a, b) => Number(a.seed || 0) - Number(b.seed || 0)
+        );
+        const grouped = splitIntoTeams(orderedPlayers, teamSize);
 
-      const { error: standingsError } =
-        await supabase
-          .from("player_standings")
-          .insert(standingRows);
+        for (const group of grouped) {
+          const { data: teamData, error: teamError } = await supabase
+            .from("teams")
+            .insert({
+              tournament_id: tournamentData.id,
+              name: group.name,
+              group_name: group.group_name,
+              seed: group.seed,
+            })
+            .select()
+            .single();
 
-      if (standingsError) {
-        throw standingsError;
+          if (teamError) {
+            throw teamError;
+          }
+
+          const { error: memberError } = await supabase
+            .from("team_players")
+            .insert(
+              group.members.map((player, slot) => ({
+                team_id: teamData.id,
+                player_id: player.id,
+                slot: slot + 1,
+              }))
+            );
+
+          if (memberError) {
+            throw memberError;
+          }
+
+          const { error: teamStandingError } = await supabase
+            .from("team_standings")
+            .insert({
+              tournament_id: tournamentData.id,
+              team_id: teamData.id,
+              matches_played: 0,
+              match_wins: 0,
+              match_losses: 0,
+              fixture_wins: 0,
+              fixture_losses: 0,
+            });
+
+          if (teamStandingError) {
+            throw teamStandingError;
+          }
+        }
+      } else {
+        const standingRows =
+          insertedPlayers.map((player) => ({
+            tournament_id: tournamentData.id,
+            player_id: player.id,
+            matches_played: 0,
+            wins: 0,
+            losses: 0,
+            points_for: 0,
+            points_against: 0,
+            tournament_points: 0,
+            rank: null,
+          }));
+
+        const { error: standingsError } =
+          await supabase
+            .from("player_standings")
+            .insert(standingRows);
+
+        if (standingsError) {
+          throw standingsError;
+        }
       }
 
       const { error: scoringError } =
@@ -438,6 +566,11 @@ export default function HomePage() {
         "activeTournamentId",
         tournamentData.id
       );
+
+      if (tournamentFormat === "team_groups") {
+        window.location.href = "/team-center";
+        return;
+      }
 
       setStatus(
         `Tournament created successfully! Tournament ID: ${tournamentData.id}`
@@ -1678,7 +1811,7 @@ export default function HomePage() {
       "activeTournamentId"
     );
 
-    window.location.href = "/";
+    window.location.href = "/?create=1";
   }
 
   function goTournamentHistory() {
@@ -1691,6 +1824,10 @@ export default function HomePage() {
 
   function goControlCenter() {
     window.location.href = "/control-center";
+  }
+
+  function goTeamCenter() {
+    window.location.href = "/team-center";
   }
 
   async function removeActiveTournament() {
@@ -1741,29 +1878,16 @@ export default function HomePage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-              <button
-                onClick={goTournamentHistory}
-                className="min-h-11 rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 sm:px-4"
-              >
-                📋 History
-              </button>
-
-              <button
-                onClick={goFormat}
-                className="min-h-11 rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 sm:px-4"
-              >
-                📖 Format
-              </button>
-
+            <AppNav links={["history", "format"]}>
               <LogoutButton />
-            </div>
+            </AppNav>
           </div>
 
           <div className="mb-6 grid gap-4 sm:mb-8 md:grid-cols-2">
-            <a
-              href="#create-tournament"
-              className="rounded-2xl border border-emerald-800 bg-emerald-950/30 p-5 transition hover:bg-emerald-950/50 sm:p-6"
+            <button
+              type="button"
+              onClick={() => setShowCreateForm(true)}
+              className="rounded-2xl border border-emerald-800 bg-emerald-950/30 p-5 text-left transition hover:bg-emerald-950/50 sm:p-6"
             >
               <div className="text-3xl">➕</div>
 
@@ -1775,7 +1899,7 @@ export default function HomePage() {
                 Set up players, courts, and
                 preliminary rounds.
               </p>
-            </a>
+            </button>
 
             <button
               onClick={goTournamentHistory}
@@ -1810,13 +1934,60 @@ export default function HomePage() {
             </button>
           </div>
 
+          {showCreateForm && (
           <div
             id="create-tournament"
             className="rounded-2xl border border-slate-800 bg-slate-900 p-4 sm:p-6"
           >
-            <h2 className="mb-6 text-2xl font-bold">
-              Create New Tournament
-            </h2>
+            <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className="text-2xl font-bold">
+                Create New Tournament
+              </h2>
+
+              <button
+                type="button"
+                onClick={() => setShowCreateForm(false)}
+                className="min-h-11 rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div className="mb-5 grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setTournamentFormat("individual")
+                }
+                className={`rounded-xl border p-4 text-left ${
+                  tournamentFormat === "individual"
+                    ? "border-emerald-600 bg-emerald-950/40"
+                    : "border-slate-800 bg-slate-950"
+                }`}
+              >
+                <div className="font-black">Individual doubles</div>
+                <p className="mt-1 text-sm text-slate-400">
+                  Mixed pairings, individual points, Top 16 knockout.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setTournamentFormat("team_groups")
+                }
+                className={`rounded-xl border p-4 text-left ${
+                  tournamentFormat === "team_groups"
+                    ? "border-emerald-600 bg-emerald-950/40"
+                    : "border-slate-800 bg-slate-950"
+                }`}
+              >
+                <div className="font-black">Team groups</div>
+                <p className="mt-1 text-sm text-slate-400">
+                  3 or 4 players per team, group round robin, then semis.
+                </p>
+              </button>
+            </div>
 
             <div className="grid gap-5 md:grid-cols-3">
               <div className="min-w-0">
@@ -1852,20 +2023,37 @@ export default function HomePage() {
                   }
                   className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base"
                 >
-                  <option value={16}>
-                    16 Players
-                  </option>
-
-                  <option value={24}>
-                    24 Players
-                  </option>
-
-                  <option value={32}>
-                    32 Players
-                  </option>
+                  {(tournamentFormat === "team_groups"
+                    ? playerCountsForTeamSize(teamSize)
+                    : [16, 24, 32]
+                  ).map((count) => (
+                    <option key={count} value={count}>
+                      {count} Players
+                    </option>
+                  ))}
                 </select>
               </div>
 
+              {tournamentFormat === "team_groups" ? (
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-300">
+                  Players per team
+                </label>
+
+                <select
+                  value={teamSize}
+                  onChange={(e) =>
+                    setTeamSize(
+                      Number(e.target.value) as TeamSize
+                    )
+                  }
+                  className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base"
+                >
+                  <option value={3}>3 Players</option>
+                  <option value={4}>4 Players</option>
+                </select>
+              </div>
+              ) : (
               <div>
                 <label className="mb-2 block text-sm font-semibold text-slate-300">
                   Preliminary Rounds
@@ -1896,6 +2084,7 @@ export default function HomePage() {
                   )}
                 </select>
               </div>
+              )}
 
               <div>
                 <label className="mb-2 block text-sm font-semibold text-slate-300">
@@ -1927,6 +2116,20 @@ export default function HomePage() {
                 </select>
               </div>
             </div>
+
+            {tournamentFormat === "team_groups" && (
+              <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
+                {(() => {
+                  const layout = teamLayout(playerCount, teamSize);
+
+                  if (!layout.valid) {
+                    return "Choose a player count that splits into an even number of teams.";
+                  }
+
+                  return `${layout.teamCount} teams of ${teamSize} · Group A (${layout.groupSize}) and Group B (${layout.groupSize}) · 5 doubles per fixture · match wins only · top 2 per group to semis (A1 vs B2, A2 vs B1). Players are assigned in order: 1-${teamSize} become Team A.`;
+                })()}
+              </div>
+            )}
 
             <div className="mt-7 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
               <button
@@ -2030,16 +2233,6 @@ export default function HomePage() {
               </button>
 
               <button
-                onClick={() => {
-                  window.location.href =
-                    "/leaderboard";
-                }}
-                className="min-h-12 w-full rounded-lg border border-emerald-700 px-6 py-3 font-semibold text-emerald-400 hover:bg-emerald-950 sm:w-auto"
-              >
-                📊 Leaderboard
-              </button>
-
-              <button
                 onClick={goTournamentHistory}
                 className="min-h-12 w-full rounded-lg border border-slate-700 px-6 py-3 font-semibold hover:bg-slate-800 sm:w-auto"
               >
@@ -2060,6 +2253,115 @@ export default function HomePage() {
               </div>
             )}
           </div>
+          )}
+        </div>
+      </main>
+    );
+  }
+
+  if (tournament.format === "team_groups") {
+    const groupedTeams = splitIntoTeams(
+      [...players].sort(
+        (a, b) => Number(a.seed || 0) - Number(b.seed || 0)
+      ),
+      (tournament.team_size === 3 ? 3 : 4) as TeamSize
+    );
+
+    return (
+      <main className="min-h-screen bg-slate-950 text-white">
+        <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-8">
+          <div className="mb-6 flex flex-col gap-5 lg:mb-8 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold leading-tight sm:text-3xl">
+                🏸 Badminton Tournament Manager
+              </h1>
+              <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">
+                Team groups format. Run fixtures from Team Center.
+              </p>
+            </div>
+
+            <AppNav
+              links={[
+                "team-center",
+                "standings",
+                "history",
+                "format",
+                "new",
+              ]}
+            >
+              <button
+                onClick={() => loadTournamentData(tournament.id)}
+                className="min-h-11 rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-800 sm:px-4"
+              >
+                🔄 Refresh
+              </button>
+            </AppNav>
+          </div>
+
+          <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-6">
+            <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
+              Active Team Tournament
+            </div>
+
+            <div className="mt-4 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <h2 className="break-words text-2xl font-black">
+                  {tournament.name}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-400">
+                  {tournament.total_players} Players
+                  {" | "}
+                  {groupedTeams.length} Teams of {tournament.team_size || 4}
+                  {" | "}
+                  {tournament.courts} Courts
+                  {" | "}
+                  Group A vs Group B
+                </p>
+              </div>
+
+              <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto lg:flex-col">
+                <button
+                  onClick={goTeamCenter}
+                  className="min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold transition hover:bg-emerald-500 lg:min-w-[200px]"
+                >
+                  👥 Open Team Center
+                </button>
+
+                <button
+                  onClick={removeActiveTournament}
+                  disabled={deletingTournament}
+                  className="min-h-11 w-full rounded-lg border border-red-800 px-4 py-2 text-sm font-bold text-red-400 hover:bg-red-950 disabled:opacity-50 lg:min-w-[200px]"
+                >
+                  {deletingTournament
+                    ? "Deleting..."
+                    : "🗑️ Delete Tournament"}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="grid gap-4 md:grid-cols-2">
+            {groupedTeams.map((team) => (
+              <article
+                key={team.name}
+                className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+              >
+                <div className="text-xs uppercase tracking-widest text-slate-500">
+                  Group {team.group_name}
+                </div>
+                <h3 className="mt-1 text-xl font-black">{team.name}</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  {team.members.map((player) => player.name).join(" · ")}
+                </p>
+              </article>
+            ))}
+          </section>
+
+          {status && (
+            <div className="mt-6 break-words rounded-lg border border-slate-700 bg-slate-950 p-4 text-sm leading-6">
+              {status}
+            </div>
+          )}
         </div>
       </main>
     );
@@ -2106,7 +2408,15 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:justify-end">
+          <AppNav
+            links={[
+              "control-center",
+              "leaderboard",
+              "history",
+              "format",
+              "new",
+            ]}
+          >
             <button
               onClick={() =>
                 loadTournamentData(
@@ -2117,45 +2427,7 @@ export default function HomePage() {
             >
               🔄 Refresh
             </button>
-
-            <button
-              onClick={goControlCenter}
-              className="min-h-11 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold transition hover:bg-emerald-500 sm:px-4"
-            >
-              🎛️ Control Center
-            </button>
-
-            <button
-              onClick={() => {
-                window.location.href =
-                  "/leaderboard";
-              }}
-              className="min-h-11 rounded-lg border border-emerald-700 px-3 py-2 text-sm font-semibold text-emerald-400 hover:bg-emerald-950 sm:px-4"
-            >
-              📊 Leaderboard
-            </button>
-
-            <button
-              onClick={goTournamentHistory}
-              className="min-h-11 rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 sm:px-4"
-            >
-              📋 History
-            </button>
-
-            <button
-              onClick={goFormat}
-              className="min-h-11 rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 sm:px-4"
-            >
-              📖 Format
-            </button>
-
-            <button
-              onClick={startNewTournament}
-              className="col-span-2 min-h-11 rounded-lg border border-emerald-700 px-4 py-2 text-sm font-bold text-emerald-400 hover:bg-emerald-950 sm:col-span-1"
-            >
-              ➕ New Tournament
-            </button>
-          </div>
+          </AppNav>
         </div>
 
         <div className="mb-6 grid gap-4 sm:mb-8 md:grid-cols-2">

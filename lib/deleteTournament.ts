@@ -1,5 +1,33 @@
 import { supabase } from "@/lib/supabase";
 
+function isMissingRelation(error: { code?: string; message?: string } | null) {
+  if (!error) {
+    return false;
+  }
+
+  return (
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    /does not exist|schema cache/i.test(error.message || "")
+  );
+}
+
+async function deleteRows(
+  table: string,
+  column: string,
+  values: string[]
+) {
+  if (values.length === 0) {
+    return;
+  }
+
+  const { error } = await supabase.from(table).delete().in(column, values);
+
+  if (error && !isMissingRelation(error)) {
+    throw error;
+  }
+}
+
 export async function deleteTournament(tournamentId: string) {
   const { data: rounds, error: roundsError } = await supabase
     .from("rounds")
@@ -11,6 +39,7 @@ export async function deleteTournament(tournamentId: string) {
   }
 
   const roundIds = (rounds || []).map((round) => round.id);
+  let matchIds: string[] = [];
 
   if (roundIds.length > 0) {
     const { data: matches, error: matchesError } = await supabase
@@ -22,28 +51,24 @@ export async function deleteTournament(tournamentId: string) {
       throw matchesError;
     }
 
-    const matchIds = (matches || []).map((match) => match.id);
+    matchIds = (matches || []).map((match) => match.id);
+  }
 
-    if (matchIds.length > 0) {
-      const { error: matchPlayersError } = await supabase
-        .from("match_players")
-        .delete()
-        .in("match_id", matchIds);
+  if (matchIds.length > 0) {
+    await deleteRows("match_players", "match_id", matchIds);
+    await deleteRows("matches", "id", matchIds);
+  }
 
-      if (matchPlayersError) {
-        throw matchPlayersError;
-      }
+  const { error: fixturesError } = await supabase
+    .from("fixtures")
+    .delete()
+    .eq("tournament_id", tournamentId);
 
-      const { error: matchDeleteError } = await supabase
-        .from("matches")
-        .delete()
-        .in("id", matchIds);
+  if (fixturesError && !isMissingRelation(fixturesError)) {
+    throw fixturesError;
+  }
 
-      if (matchDeleteError) {
-        throw matchDeleteError;
-      }
-    }
-
+  if (roundIds.length > 0) {
     const { error: roundDeleteError } = await supabase
       .from("rounds")
       .delete()
@@ -52,6 +77,37 @@ export async function deleteTournament(tournamentId: string) {
     if (roundDeleteError) {
       throw roundDeleteError;
     }
+  }
+
+  const { data: teams, error: teamsError } = await supabase
+    .from("teams")
+    .select("id")
+    .eq("tournament_id", tournamentId);
+
+  if (teamsError && !isMissingRelation(teamsError)) {
+    throw teamsError;
+  }
+
+  const teamIds = (teams || []).map((team) => team.id);
+
+  await deleteRows("team_players", "team_id", teamIds);
+
+  const { error: teamStandingsError } = await supabase
+    .from("team_standings")
+    .delete()
+    .eq("tournament_id", tournamentId);
+
+  if (teamStandingsError && !isMissingRelation(teamStandingsError)) {
+    throw teamStandingsError;
+  }
+
+  const { error: teamsDeleteError } = await supabase
+    .from("teams")
+    .delete()
+    .eq("tournament_id", tournamentId);
+
+  if (teamsDeleteError && !isMissingRelation(teamsDeleteError)) {
+    throw teamsDeleteError;
   }
 
   const { error: standingsError } = await supabase

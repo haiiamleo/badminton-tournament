@@ -2,6 +2,7 @@ export function isKnockoutRound(roundType: string | null | undefined) {
   return (
     roundType === "quarterfinal" ||
     roundType === "semifinal" ||
+    roundType === "third_place" ||
     roundType === "final"
   );
 }
@@ -20,7 +21,7 @@ export function sanitizeScoreInput(value: string) {
 
 export function scoreRuleHint(roundType: string | null | undefined) {
   if (isKnockoutRound(roundType)) {
-    return "QF / SF / Final: first to 21, must win by 2. After 29-29, 30 is golden point.";
+    return "QF / SF / 3rd / Final: first to 21, must win by 2. After 29-29, 30 is golden point.";
   }
 
   return "Prelims: first to 21. At 20-20, the next point wins (21-20).";

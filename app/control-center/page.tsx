@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import AppNav from "@/app/components/AppNav";
 import { formatDoublesTeam } from "@/lib/finalResult";
 import {
   sanitizeScoreInput,
@@ -17,6 +18,7 @@ type Tournament = {
   courts: number;
   qualification_count: number;
   status: string;
+  format?: string;
 };
 
 type Player = {
@@ -165,6 +167,11 @@ export default function ControlCenterPage() {
 
       if (tournamentError) {
         throw tournamentError;
+      }
+
+      if (tournamentData.format === "team_groups") {
+        window.location.href = "/team-center";
+        return;
       }
 
       setTournament(tournamentData);
@@ -788,10 +795,6 @@ export default function ControlCenterPage() {
     window.location.href = "/tournaments";
   };
 
-  const goFormat = () => {
-    window.location.href = "/format";
-  };
-
   const goGenerateNextRound = () => {
     /*
      * The existing tournament page owns the round-generation engine.
@@ -806,6 +809,10 @@ export default function ControlCenterPage() {
     return (
       <main className="min-h-screen bg-slate-950 px-4 py-10 text-white">
         <div className="mx-auto max-w-7xl">
+          <div className="mb-6 flex justify-end">
+            <AppNav />
+          </div>
+
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
             <div className="text-4xl">🏸</div>
             <h1 className="mt-4 text-2xl font-bold">
@@ -877,43 +884,15 @@ export default function ControlCenterPage() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <AppNav links={["leaderboard", "history", "format"]}>
               <button
                 onClick={refresh}
                 disabled={refreshing}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold transition hover:bg-slate-800 disabled:opacity-50"
+                className="min-h-11 rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 disabled:opacity-50 sm:px-4"
               >
                 {refreshing ? "Refreshing..." : "🔄 Refresh"}
               </button>
-
-              <button
-                onClick={goLeaderboard}
-                className="rounded-lg border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-950"
-              >
-                📊 Leaderboard
-              </button>
-
-              <button
-                onClick={goTournamentHistory}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold transition hover:bg-slate-800"
-              >
-                📋 History
-              </button>
-
-              <button
-                onClick={goFormat}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold transition hover:bg-slate-800"
-              >
-                📖 Format
-              </button>
-
-              <button
-                onClick={goHome}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold transition hover:bg-slate-800"
-              >
-                🏠 Home
-              </button>
-            </div>
+            </AppNav>
           </div>
         </header>
 
