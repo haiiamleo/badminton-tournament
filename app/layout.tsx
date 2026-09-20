@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Baddy Smash",
+  title: "Shuttle and Chill",
   description: "Badminton club tournaments for mixed doubles and team groups.",
 };
 

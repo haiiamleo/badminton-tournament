@@ -2032,7 +2032,7 @@ export default function HomePage() {
           <div className="mb-8 flex flex-col gap-5 lg:mb-10 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <h1 className="text-3xl font-bold leading-tight sm:text-4xl">
-                🏸 Baddy Smash
+                🏸 Shuttle and Chill
               </h1>
 
               <p className="mt-3 text-sm leading-6 text-slate-400 sm:text-base">
@@ -2480,7 +2480,7 @@ export default function HomePage() {
           <div className="mb-6 flex flex-col gap-5 lg:mb-8 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <h1 className="text-2xl font-bold leading-tight sm:text-3xl">
-                🏸 Baddy Smash
+                🏸 Shuttle and Chill
               </h1>
               <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">
                 Team groups format. Run fixtures from Team Center.
@@ -2584,7 +2584,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
           <header className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h1 className="text-3xl font-black">🏸 Baddy Smash</h1>
+              <h1 className="text-3xl font-black">🏸 Shuttle and Chill</h1>
               <p className="mt-2 text-slate-400">
                 {tournament.name} · Split Pairs format
               </p>
@@ -2664,7 +2664,7 @@ export default function HomePage() {
         <div className="mb-6 flex flex-col gap-5 lg:mb-8 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-bold leading-tight sm:text-3xl">
-              🏸 Baddy Smash
+              🏸 Shuttle and Chill
             </h1>
 
             <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">

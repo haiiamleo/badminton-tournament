@@ -1680,7 +1680,7 @@ export default function ControlCenterPage() {
           </div>
 
           <div className="mt-4 text-center text-xs text-slate-600">
-            Baddy Smash Control Center
+            Shuttle and Chill Control Center
           </div>
         </footer>
       </div>
