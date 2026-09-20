@@ -33,7 +33,14 @@ type Round = {
   id: string;
   tournament_id: string;
   round_number: number;
-  round_type: "preliminary" | "quarterfinal" | "semifinal" | "final";
+  round_type:
+    | "preliminary"
+    | "quarterfinal"
+    | "semifinal"
+    | "final"
+    | "pair_round_robin"
+    | "split_semifinal"
+    | "split_final";
   status: "pending" | "generated" | "in_progress" | "completed";
   created_at?: string;
 };
@@ -84,6 +91,9 @@ const roundTypeLabel: Record<Round["round_type"], string> = {
   quarterfinal: "Quarterfinals",
   semifinal: "Semifinals",
   final: "Final",
+  pair_round_robin: "Fixed-Pair Round Robin",
+  split_semifinal: "Split-Pair Semifinals",
+  split_final: "Split-Pair Finals",
 };
 
 function formatPoints(value: number | null | undefined) {
@@ -239,6 +249,14 @@ export default function ControlCenterPage() {
           ) ||
         [...loadedRounds].reverse()[0];
 
+      if (
+        tournamentData.format === "split_pairs" &&
+        activeRound.round_type !== "preliminary"
+      ) {
+        window.location.href = "/split-pairs-center";
+        return;
+      }
+
       setCurrentRound(activeRound);
 
       const { data: matchData, error: matchesError } = await supabase
@@ -317,10 +335,10 @@ export default function ControlCenterPage() {
       });
 
       setScoreInputs(initialScores);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Control center load error:", err);
       setError(
-        err?.message ||
+        (err instanceof Error ? err.message : "") ||
           "Unable to load the tournament control center."
       );
     } finally {
@@ -330,6 +348,8 @@ export default function ControlCenterPage() {
   }, []);
 
   useEffect(() => {
+    // The callback performs the initial external data synchronization.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadControlCenter();
 
     const interval = setInterval(() => {
@@ -760,11 +780,11 @@ export default function ControlCenterPage() {
       );
 
       await loadControlCenter();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Save match error:", err);
 
       setError(
-        err?.message ||
+        (err instanceof Error ? err.message : "") ||
           "Unable to save the match result."
       );
     } finally {
@@ -941,10 +961,14 @@ export default function ControlCenterPage() {
 
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
             <div className="text-xs uppercase tracking-wide text-slate-500">
-              Qualification
+              {tournament.format === "split_pairs"
+                ? "After Prelims"
+                : "Qualification"}
             </div>
             <div className="mt-1 text-2xl font-black">
-              Top {tournament.qualification_count}
+              {tournament.format === "split_pairs"
+                ? "Champ / Plate"
+                : `Top ${tournament.qualification_count}`}
             </div>
           </div>
         </section>
@@ -1417,7 +1441,10 @@ export default function ControlCenterPage() {
 
                 <tbody>
                   {standingsWithPlayers
-                    .slice(0, 16)
+                    .slice(
+                      0,
+                      tournament.format === "split_pairs" ? 20 : 16
+                    )
                     .map((row, index) => {
                       const rank = index + 1;
 
@@ -1425,8 +1452,8 @@ export default function ControlCenterPage() {
                         <tr
                           key={row.player_id}
                           className={`border-b border-slate-800 last:border-0 ${
-                            rank <=
-                            tournament.qualification_count
+                            tournament.format === "split_pairs" ||
+                            rank <= tournament.qualification_count
                               ? "bg-emerald-950/10"
                               : ""
                           }`}
@@ -1443,10 +1470,15 @@ export default function ControlCenterPage() {
                                   : rank}
                               </span>
 
-                              {rank <=
-                                tournament.qualification_count && (
+                              {(tournament.format === "split_pairs" ||
+                                rank <=
+                                  tournament.qualification_count) && (
                                 <span className="rounded-full bg-emerald-950 px-2 py-0.5 text-[9px] font-bold text-emerald-400">
-                                  TOP 16
+                                  {tournament.format === "split_pairs"
+                                    ? rank <= 10
+                                      ? "CHAMPIONSHIP"
+                                      : "PLATE"
+                                    : `TOP ${tournament.qualification_count}`}
                                 </span>
                               )}
                             </div>
@@ -1561,11 +1593,15 @@ export default function ControlCenterPage() {
             <div className="text-3xl">⚡</div>
 
             <h3 className="mt-3 font-black">
-              Quarterfinals
+              {tournament.format === "split_pairs"
+                ? "Fixed-Pair Round Robin"
+                : "Quarterfinals"}
             </h3>
 
             <p className="mt-1 text-sm text-slate-400">
-              Top {tournament.qualification_count} players
+              {tournament.format === "split_pairs"
+                ? "Five pairs in each draw"
+                : `Top ${tournament.qualification_count} players`}
             </p>
 
             {rounds.some(
@@ -1592,11 +1628,15 @@ export default function ControlCenterPage() {
             <div className="text-3xl">🏆</div>
 
             <h3 className="mt-3 font-black">
-              Championship
+              {tournament.format === "split_pairs"
+                ? "Two Finals"
+                : "Championship"}
             </h3>
 
             <p className="mt-1 text-sm text-slate-400">
-              Semifinals → Final
+              {tournament.format === "split_pairs"
+                ? "Two semifinals → two finals"
+                : "Semifinals → Final"}
             </p>
 
             {isTournamentCompleted && (

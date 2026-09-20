@@ -8,8 +8,14 @@ import { deleteTournament } from "@/lib/deleteTournament";
 import {
   formatDoublesTeam,
   getDoublesFinalResult,
+  getSplitPairFinalResults,
 } from "@/lib/finalResult";
 import { rankTeams } from "@/lib/teamTournament";
+import {
+  poolLabel,
+  rankFixedPairs,
+  type SplitPool,
+} from "@/lib/splitPairsTournament";
 
 type Tournament = {
   id: string;
@@ -55,6 +61,8 @@ type Match = {
   team1_score: number | null;
   team2_score: number | null;
   winner_team: number | null;
+  fixed_pair1_id?: string | null;
+  fixed_pair2_id?: string | null;
 };
 
 type MatchPlayer = {
@@ -90,6 +98,22 @@ type Fixture = {
   status: string;
 };
 
+type FixedPair = {
+  id: string;
+  pool_name: SplitPool;
+  seed: number;
+};
+
+type FixedPairStanding = {
+  pair_id: string;
+  matches_played: number;
+  wins: number;
+  losses: number;
+  standing_points: number;
+  points_for: number;
+  points_against: number;
+};
+
 function points(value: number | null | undefined) {
   return Number(value || 0)
     .toFixed(1)
@@ -117,6 +141,18 @@ function roundName(round: Round) {
     return "3rd Place";
   }
 
+  if (round.round_type === "pair_round_robin") {
+    return "Fixed-Pair Round Robin";
+  }
+
+  if (round.round_type === "split_semifinal") {
+    return "Championship and Plate Semifinals";
+  }
+
+  if (round.round_type === "split_final") {
+    return "Championship and Plate Finals";
+  }
+
   return round.round_type;
 }
 
@@ -139,6 +175,13 @@ export default function HistoricalTournamentPage() {
     []
   );
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [fixedPairs, setFixedPairs] = useState<FixedPair[]>([]);
+  const [fixedPairPlayers, setFixedPairPlayers] = useState<
+    Record<string, Player[]>
+  >({});
+  const [fixedPairStandings, setFixedPairStandings] = useState<
+    FixedPairStanding[]
+  >([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -249,6 +292,67 @@ export default function HistoricalTournamentPage() {
             (teamStandingsResponse.data || []) as TeamStanding[]
           );
           setFixtures((fixturesResponse.data || []) as Fixture[]);
+        }
+
+        if (
+          (tournamentResponse.data as Tournament).format ===
+          "split_pairs"
+        ) {
+          const [pairsResponse, pairStandingsResponse] =
+            await Promise.all([
+              supabase
+                .from("fixed_pairs")
+                .select("id,pool_name,seed")
+                .eq("tournament_id", tournamentId)
+                .order("pool_name")
+                .order("seed"),
+              supabase
+                .from("fixed_pair_standings")
+                .select("*")
+                .eq("tournament_id", tournamentId),
+            ]);
+
+          if (pairsResponse.error) throw pairsResponse.error;
+          if (pairStandingsResponse.error) {
+            throw pairStandingsResponse.error;
+          }
+
+          const loadedPairs = (pairsResponse.data || []) as FixedPair[];
+          const members: Record<string, Player[]> = {};
+
+          if (loadedPairs.length > 0) {
+            const { data: memberRows, error: memberError } =
+              await supabase
+                .from("fixed_pair_players")
+                .select("pair_id,player_id,slot")
+                .in(
+                  "pair_id",
+                  loadedPairs.map((pair) => pair.id)
+                )
+                .order("slot");
+
+            if (memberError) throw memberError;
+
+            const loadedPlayerMap = new Map(
+              (playersResponse.data || []).map((player) => [
+                player.id,
+                player as Player,
+              ])
+            );
+
+            for (const pair of loadedPairs) {
+              members[pair.id] = (memberRows || [])
+                .filter((row) => row.pair_id === pair.id)
+                .map((row) => loadedPlayerMap.get(row.player_id))
+                .filter(Boolean) as Player[];
+            }
+          }
+
+          setFixedPairs(loadedPairs);
+          setFixedPairPlayers(members);
+          setFixedPairStandings(
+            (pairStandingsResponse.data || []) as FixedPairStanding[]
+          );
         }
 
         if (loadedRounds.length > 0) {
@@ -423,6 +527,50 @@ export default function HistoricalTournamentPage() {
     };
   }, [fixtures, teamMap]);
 
+  const fixedPairMap = useMemo(
+    () => new Map(fixedPairs.map((pair) => [pair.id, pair])),
+    [fixedPairs]
+  );
+
+  const splitStandings = useMemo(() => {
+    const byPool: Record<
+      SplitPool,
+      (FixedPairStanding & { pair: FixedPair })[]
+    > = { top: [], bottom: [] };
+
+    for (const standing of fixedPairStandings) {
+      const pair = fixedPairMap.get(standing.pair_id);
+
+      if (pair) {
+        byPool[pair.pool_name].push({ ...standing, pair });
+      }
+    }
+
+    byPool.top = rankFixedPairs(byPool.top);
+    byPool.bottom = rankFixedPairs(byPool.bottom);
+
+    return byPool;
+  }, [fixedPairStandings, fixedPairMap]);
+
+  const splitFinalResults = useMemo(() => {
+    const results = getSplitPairFinalResults(
+      rounds,
+      matches,
+      new Map(
+        fixedPairs.map((pair) => [pair.id, pair.pool_name])
+      )
+    );
+
+    return results.map((result) => ({
+      pool: result.pool,
+      champion: fixedPairMap.get(result.championPairId),
+      runnerUp: fixedPairMap.get(result.runnerUpPairId),
+      score: `${result.team1Score ?? "-"} - ${
+        result.team2Score ?? "-"
+      }`,
+    }));
+  }, [rounds, matches, fixedPairs, fixedPairMap]);
+
   const goHistory = () => {
     window.location.href = "/tournaments";
   };
@@ -558,6 +706,8 @@ export default function HistoricalTournamentPage() {
                     <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-400">
                       {tournament.format === "team_groups"
                         ? `Team groups · ${tournament.team_size || 4} per team`
+                        : tournament.format === "split_pairs"
+                          ? "Split pairs · 20 players"
                         : `${tournament.preliminary_rounds} Rounds`}
                     </span>
 
@@ -576,6 +726,8 @@ export default function HistoricalTournamentPage() {
               >
                 {tournament.format === "team_groups"
                   ? "📊 Standings"
+                  : tournament.format === "split_pairs"
+                    ? "📊 Pair Standings"
                   : "📊 Leaderboard"}
               </button>
 
@@ -626,6 +778,37 @@ export default function HistoricalTournamentPage() {
           </section>
         )}
 
+        {tournament.format === "split_pairs" &&
+          splitFinalResults.length > 0 && (
+            <section className="mb-8 grid gap-4 md:grid-cols-2">
+              {splitFinalResults.map((result) => (
+                <article
+                  key={result.pool}
+                  className="rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/50 to-slate-950 p-8 text-center"
+                >
+                  <div className="text-5xl">🏆</div>
+                  <div className="mt-3 text-sm font-bold uppercase tracking-widest text-yellow-500">
+                    {poolLabel(result.pool || "")} Champions
+                  </div>
+                  <h2 className="mt-2 text-2xl font-black text-yellow-400">
+                    {(fixedPairPlayers[result.champion?.id || ""] || [])
+                      .map((player) => player.name)
+                      .join(" + ")}
+                  </h2>
+                  <p className="mt-3 text-sm text-slate-400">
+                    Final {result.score}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Runners-up:{" "}
+                    {(fixedPairPlayers[result.runnerUp?.id || ""] || [])
+                      .map((player) => player.name)
+                      .join(" + ")}
+                  </p>
+                </article>
+              ))}
+            </section>
+          )}
+
         {tournament.format !== "team_groups" && finalResult && (
           <section className="mb-8 grid gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/50 to-slate-950 p-8 text-center">
@@ -675,11 +858,17 @@ export default function HistoricalTournamentPage() {
 
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
             <div className="text-xs text-slate-500">
-              {tournament.format === "team_groups" ? "Format" : "Preliminary"}
+              {tournament.format === "team_groups"
+                ? "Format"
+                : tournament.format === "split_pairs"
+                  ? "Stages"
+                  : "Preliminary"}
             </div>
             <div className="mt-1 text-2xl font-black">
               {tournament.format === "team_groups"
                 ? "Teams"
+                : tournament.format === "split_pairs"
+                  ? "5 + Pairs"
                 : tournament.preliminary_rounds}
             </div>
           </div>
@@ -777,6 +966,118 @@ export default function HistoricalTournamentPage() {
                     </article>
                   );
                 })}
+              </div>
+            </section>
+          </>
+        ) : tournament.format === "split_pairs" ? (
+          <>
+            <section className="mb-8 grid gap-4 md:grid-cols-2">
+              {(["top", "bottom"] as SplitPool[]).map((pool) => (
+                <article
+                  key={pool}
+                  className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                >
+                  <h2 className="text-xl font-black">
+                    {poolLabel(pool)} Pair Standings
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Ranked by standing points, point difference, then
+                    points scored.
+                  </p>
+                  <div className="mt-4 space-y-2">
+                    {splitStandings[pool].map((row, index) => (
+                      <div
+                        key={row.pair_id}
+                        className="rounded-lg bg-slate-950 px-3 py-3 text-sm"
+                      >
+                        <div className="flex justify-between gap-3">
+                          <div className="font-bold">
+                            <span className="mr-2 text-emerald-400">
+                              {index + 1}.
+                            </span>
+                            {(fixedPairPlayers[row.pair_id] || [])
+                              .map((player) => player.name)
+                              .join(" + ")}
+                          </div>
+                          <div className="shrink-0 font-black text-yellow-400">
+                            {row.standing_points} pts
+                          </div>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {row.wins}W {row.losses}L · {row.points_for}-
+                          {row.points_against}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </section>
+
+            <section className="mb-8">
+              <h2 className="mb-1 text-2xl font-black">
+                Fixed-Pair Match History
+              </h2>
+              <p className="mb-4 text-sm text-slate-400">
+                Round robin, semifinal, and final matches from the
+                Championship and Plate draws.
+              </p>
+              <div className="space-y-4">
+                {rounds
+                  .filter((round) => round.round_type !== "preliminary")
+                  .map((round) => (
+                    <article
+                      key={round.id}
+                      className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                    >
+                      <h3 className="text-xl font-black">
+                        {roundName(round)}
+                      </h3>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                        {matches
+                          .filter((match) => match.round_id === round.id)
+                          .map((match) => {
+                            const pair1 = match.fixed_pair1_id
+                              ? fixedPairMap.get(match.fixed_pair1_id)
+                              : undefined;
+                            const pair2 = match.fixed_pair2_id
+                              ? fixedPairMap.get(match.fixed_pair2_id)
+                              : undefined;
+
+                            return (
+                              <div
+                                key={match.id}
+                                className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+                              >
+                                <div className="text-xs uppercase tracking-widest text-slate-500">
+                                  {poolLabel(pair1?.pool_name || "")}
+                                </div>
+                                <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-sm">
+                                  <div>
+                                    {(
+                                      fixedPairPlayers[pair1?.id || ""] || []
+                                    )
+                                      .map((player) => player.name)
+                                      .join(" + ")}
+                                  </div>
+                                  <div className="font-black">
+                                    {match.team1_score ?? "-"} -{" "}
+                                    {match.team2_score ?? "-"}
+                                  </div>
+                                  <div className="text-right">
+                                    {(
+                                      fixedPairPlayers[pair2?.id || ""] || []
+                                    )
+                                      .map((player) => player.name)
+                                      .join(" + ")}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </article>
+                  ))}
               </div>
             </section>
           </>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import AppNav from "@/app/components/AppNav";
 import { deleteTournament } from "@/lib/deleteTournament";
@@ -27,7 +28,20 @@ function formatDate(value: string | null) {
   return new Date(value).toLocaleDateString();
 }
 
+function formatDescription(tournament: Tournament) {
+  if (tournament.format === "team_groups") {
+    return `Team groups · ${tournament.team_size || 4} per team`;
+  }
+
+  if (tournament.format === "split_pairs") {
+    return "Split pairs · 5 random prelim rounds";
+  }
+
+  return `${tournament.preliminary_rounds} Preliminary Rounds`;
+}
+
 export default function TournamentHistoryPage() {
+  const router = useRouter();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -82,37 +96,42 @@ export default function TournamentHistoryPage() {
     [tournaments]
   );
 
-  const goHome = () => {
-    window.location.href = "/";
-  };
-
-  const goFormat = () => {
-    window.location.href = "/format";
-  };
-
-  const startNewTournament = () => {
-    localStorage.removeItem("activeTournamentId");
-    window.location.href = "/?create=1";
-  };
-
   const openCompletedTournament = (tournamentId: string) => {
-    window.location.href = `/tournaments/${tournamentId}`;
+    router.push(`/tournaments/${tournamentId}`);
   };
 
-  const resumeTournament = (tournament: Tournament) => {
+  const resumeTournament = async (tournament: Tournament) => {
     localStorage.setItem("activeTournamentId", tournament.id);
 
     if (tournament.status === "setup") {
-      window.location.href = "/";
+      router.push("/");
       return;
     }
 
     if (tournament.format === "team_groups") {
-      window.location.href = "/team-center";
+      router.push("/team-center");
       return;
     }
 
-    window.location.href = "/control-center";
+    if (tournament.format === "split_pairs") {
+      const { data: latestRound } = await supabase
+        .from("rounds")
+        .select("round_type")
+        .eq("tournament_id", tournament.id)
+        .order("round_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      router.push(
+        latestRound &&
+        latestRound.round_type !== "preliminary"
+          ? "/split-pairs-center"
+          : "/control-center"
+      );
+      return;
+    }
+
+    router.push("/control-center");
   };
 
   const removeTournament = async (tournament: Tournament) => {
@@ -214,9 +233,7 @@ export default function TournamentHistoryPage() {
                           <p className="mt-2 text-sm text-slate-400">
                             {tournament.total_players} Players
                             {" · "}
-                            {tournament.format === "team_groups"
-                              ? `Team groups · ${tournament.team_size || 4} per team`
-                              : `${tournament.preliminary_rounds} Preliminary Rounds`}
+                            {formatDescription(tournament)}
                             {" · "}
                             {tournament.courts} Courts
                           </p>
@@ -292,9 +309,7 @@ export default function TournamentHistoryPage() {
                           <p className="mt-2 text-sm text-slate-400">
                             {tournament.total_players} Players
                             {" · "}
-                            {tournament.format === "team_groups"
-                              ? `Team groups · ${tournament.team_size || 4} per team`
-                              : `${tournament.preliminary_rounds} Preliminary Rounds`}
+                            {formatDescription(tournament)}
                             {" · "}
                             {tournament.courts} Courts
                           </p>
@@ -315,6 +330,8 @@ export default function TournamentHistoryPage() {
                               ? "🏠 Continue Setup"
                               : tournament.format === "team_groups"
                                 ? "👥 Team Center"
+                                : tournament.format === "split_pairs"
+                                  ? "🔀 Resume Split Pairs"
                                 : "🎛️ Control Center"}
                           </button>
 

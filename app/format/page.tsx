@@ -2,9 +2,178 @@
 
 import { useState } from "react";
 import AppNav from "@/app/components/AppNav";
+import FormatDiagram, {
+  type DiagramStep,
+} from "@/app/components/FormatDiagram";
+
+const individualSteps: DiagramStep[] = [
+  {
+    nodes: [
+      {
+        title: "Preliminary rounds",
+        detail: "Everyone plays · random, then smart pairing",
+      },
+    ],
+  },
+  {
+    nodes: [
+      {
+        title: "Quarterfinals",
+        detail: "Top 16 qualify · 4 doubles matches",
+      },
+    ],
+  },
+  {
+    nodes: [
+      { title: "Semifinals", detail: "8 winners · 2 doubles matches" },
+    ],
+  },
+  {
+    nodes: [{ title: "Final", detail: "4 winners · 1 doubles match" }],
+  },
+  {
+    nodes: [{ title: "Champions", detail: "The winning pair" }],
+  },
+];
+
+const splitPairSteps: DiagramStep[] = [
+  {
+    nodes: [
+      { title: "Random prelims", detail: "5 rounds · all 20 players" },
+    ],
+  },
+  {
+    nodes: [
+      {
+        title: "Rank split",
+        detail: "Ranks 1-10 Championship · 11-20 Plate",
+      },
+    ],
+  },
+  {
+    nodes: [
+      {
+        title: "Championship pairs",
+        detail: "1+10, 2+9, 3+8, 4+7, 5+6",
+      },
+      {
+        title: "Plate pairs",
+        detail: "11+20, 12+19, 13+18, 14+17, 15+16",
+      },
+    ],
+  },
+  {
+    nodes: [
+      {
+        title: "Championship RR",
+        detail: "10 matches · 2 pts a win",
+      },
+      { title: "Plate RR", detail: "10 matches · 2 pts a win" },
+    ],
+  },
+  {
+    nodes: [
+      { title: "Championship SF", detail: "1 v 4 and 2 v 3" },
+      { title: "Plate SF", detail: "1 v 4 and 2 v 3" },
+    ],
+  },
+  {
+    nodes: [
+      {
+        title: "Championship final",
+        detail: "Champion and runner-up",
+      },
+      { title: "Plate final", detail: "Champion and runner-up" },
+    ],
+  },
+];
+
+const teamSteps: DiagramStep[] = [
+  {
+    nodes: [
+      { title: "Teams formed", detail: "Even number of teams of 3 or 4" },
+    ],
+  },
+  {
+    nodes: [
+      { title: "Group A", detail: "Round robin · 5 matches a fixture" },
+      { title: "Group B", detail: "Round robin · 5 matches a fixture" },
+    ],
+  },
+  {
+    nodes: [
+      { title: "Semifinals", detail: "A1 v B2 and A2 v B1" },
+    ],
+  },
+  {
+    nodes: [
+      { title: "3rd place", detail: "The two semifinal losers" },
+      { title: "Final", detail: "The two semifinal winners" },
+    ],
+  },
+  {
+    nodes: [{ title: "Champions", detail: "The winning team" }],
+  },
+];
+
+function individualTotal(players: number, prelimRounds: number) {
+  return (players / 4) * prelimRounds + 7;
+}
+
+function teamMatchTotal(playerCount: number, teamSize: number) {
+  const teamCount = playerCount / teamSize;
+  const groupSize = teamCount / 2;
+  const groupFixtures = groupSize * (groupSize - 1);
+  const knockoutFixtures = 4;
+
+  return (groupFixtures + knockoutFixtures) * 5;
+}
+
+function MatchCounts({
+  rows,
+  total,
+  note,
+}: {
+  rows: { label: string; count: number }[];
+  total: number;
+  note?: string;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+      <h2 className="text-xl font-black">How many matches</h2>
+      <p className="mt-2 text-sm text-slate-400">
+        Every number below is a doubles match, two versus two.
+      </p>
+      <div className="mt-4 divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+        {rows.map((row) => (
+          <div
+            key={row.label}
+            className="flex items-center justify-between gap-4 px-4 py-3 text-sm"
+          >
+            <span className="text-slate-300">{row.label}</span>
+            <span className="shrink-0 font-black text-emerald-400">
+              {row.count}
+            </span>
+          </div>
+        ))}
+        <div className="flex items-center justify-between gap-4 bg-emerald-950/30 px-4 py-3 text-sm">
+          <span className="font-black">Total</span>
+          <span className="shrink-0 text-lg font-black text-yellow-400">
+            {total}
+          </span>
+        </div>
+      </div>
+      {note && (
+        <p className="mt-3 text-sm leading-6 text-slate-400">{note}</p>
+      )}
+    </section>
+  );
+}
 
 export default function TournamentFormatPage() {
-  const [tab, setTab] = useState<"individual" | "team">("individual");
+  const [tab, setTab] = useState<
+    "individual" | "split_pairs" | "team"
+  >("individual");
 
   const goHome = () => {
     window.location.href = "/";
@@ -23,7 +192,7 @@ export default function TournamentFormatPage() {
               📖 Tournament Format
             </h1>
             <p className="mt-2 text-sm text-slate-400">
-              Individual mixed doubles, or team groups of 3 or 4.
+              Choose individual, split-pair, or team-group play.
             </p>
           </div>
 
@@ -33,7 +202,7 @@ export default function TournamentFormatPage() {
         <div
           role="tablist"
           aria-label="Tournament formats"
-          className="mb-6 grid grid-cols-2 gap-2 rounded-2xl border border-slate-800 bg-slate-900 p-2"
+          className="mb-6 grid grid-cols-1 gap-2 rounded-2xl border border-slate-800 bg-slate-900 p-2 sm:grid-cols-3"
         >
           <button
             type="button"
@@ -47,6 +216,20 @@ export default function TournamentFormatPage() {
             }`}
           >
             Individual doubles
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "split_pairs"}
+            onClick={() => setTab("split_pairs")}
+            className={`rounded-xl px-4 py-3 text-sm font-black transition duration-300 ${
+              tab === "split_pairs"
+                ? "bg-emerald-600 text-white"
+                : "text-slate-400 hover:bg-slate-800 hover:text-white"
+            }`}
+          >
+            Split pairs
           </button>
 
           <button
@@ -110,7 +293,16 @@ export default function TournamentFormatPage() {
               <h2 className="text-xl font-black">
                 Tournament stages
               </h2>
-              <ol className="mt-4 space-y-4 text-sm leading-6 text-slate-300">
+              <p className="mt-2 text-sm text-slate-400">
+                One path from the first round to the title.
+              </p>
+              <div className="mt-4">
+                <FormatDiagram
+                  label="Individual doubles stages: preliminary rounds, quarterfinals, semifinals, final, champions."
+                  steps={individualSteps}
+                />
+              </div>
+              <ol className="mt-6 space-y-4 text-sm leading-6 text-slate-300">
                 <li>
                   <strong className="text-white">
                     1. Preliminary rounds
@@ -149,6 +341,64 @@ export default function TournamentFormatPage() {
                 </li>
               </ol>
             </section>
+
+            <MatchCounts
+              rows={[
+                { label: "6 preliminary rounds (6 per round)", count: 36 },
+                { label: "Quarterfinals", count: 4 },
+                { label: "Semifinals", count: 2 },
+                { label: "Final", count: 1 },
+              ]}
+              total={individualTotal(24, 6)}
+              note="Usual setup is 24 players and 6 prelims: 43 matches. Knockout is always 7. Each prelim round is players ÷ 4 matches, so 16 players is 4 a round and 32 players is 8 a round."
+            />
+
+            <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+              <div className="px-6 pt-6">
+                <h3 className="text-lg font-black">Other sizes</h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  Total matches for 4 to 8 prelim rounds.
+                </p>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[28rem] text-left text-sm">
+                  <thead className="bg-slate-950 text-xs uppercase tracking-widest text-slate-500">
+                    <tr>
+                      <th className="px-6 py-3">Players</th>
+                      {[4, 5, 6, 7, 8].map((rounds) => (
+                        <th key={rounds} className="px-3 py-3 text-center">
+                          {rounds}R
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[16, 24, 32].map((players) => (
+                      <tr
+                        key={players}
+                        className="border-t border-slate-800"
+                      >
+                        <td className="px-6 py-3 font-semibold">
+                          {players}
+                        </td>
+                        {[4, 5, 6, 7, 8].map((rounds) => (
+                          <td
+                            key={rounds}
+                            className={`px-3 py-3 text-center ${
+                              players === 24 && rounds === 6
+                                ? "font-black text-yellow-400"
+                                : "text-slate-300"
+                            }`}
+                          >
+                            {individualTotal(players, rounds)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
 
             <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
               <h2 className="text-xl font-black">Scoring</h2>
@@ -274,7 +524,18 @@ export default function TournamentFormatPage() {
               <h2 className="text-xl font-black">
                 Tournament stages
               </h2>
-              <ol className="mt-4 space-y-4 text-sm leading-6 text-slate-300">
+              <p className="mt-2 text-sm text-slate-400">
+                Two groups run side by side, then merge into the
+                knockout.
+              </p>
+              <div className="mt-4">
+                <FormatDiagram
+                  accent="#38bdf8"
+                  label="Team group stages: teams formed, Group A and Group B round robins, semifinals, 3rd place and final, champions."
+                  steps={teamSteps}
+                />
+              </div>
+              <ol className="mt-6 space-y-4 text-sm leading-6 text-slate-300">
                 <li>
                   <strong className="text-white">1. Prelims</strong>
                   <div className="mt-1">
@@ -305,6 +566,105 @@ export default function TournamentFormatPage() {
               </ol>
             </section>
 
+            <MatchCounts
+              rows={[
+                {
+                  label: "Group prelims (6 fixtures × 5)",
+                  count: 30,
+                },
+                { label: "Semifinals (2 fixtures × 5)", count: 10 },
+                { label: "3rd place (1 fixture × 5)", count: 5 },
+                { label: "Final (1 fixture × 5)", count: 5 },
+              ]}
+              total={teamMatchTotal(24, 4)}
+              note="Usual setup is 24 players and 4 per team: 50 matches. Each team-vs-team fixture is always 5 doubles games. Knockout is always 4 fixtures, or 20 matches."
+            />
+
+            <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+              <div className="px-6 pt-6">
+                <h3 className="text-lg font-black">Other sizes</h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  Total doubles matches for each allowed field.
+                </p>
+              </div>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[28rem] text-left text-sm">
+                  <thead className="bg-slate-950 text-xs uppercase tracking-widest text-slate-500">
+                    <tr>
+                      <th className="px-6 py-3">Setup</th>
+                      <th className="px-3 py-3 text-center">Prelims</th>
+                      <th className="px-3 py-3 text-center">Knockout</th>
+                      <th className="px-6 py-3 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      {
+                        label: "12 players · 3 per team",
+                        players: 12,
+                        size: 3,
+                      },
+                      {
+                        label: "16 players · 4 per team",
+                        players: 16,
+                        size: 4,
+                      },
+                      {
+                        label: "18 players · 3 per team",
+                        players: 18,
+                        size: 3,
+                      },
+                      {
+                        label: "24 players · 4 per team",
+                        players: 24,
+                        size: 4,
+                      },
+                      {
+                        label: "24 players · 3 per team",
+                        players: 24,
+                        size: 3,
+                      },
+                      {
+                        label: "32 players · 4 per team",
+                        players: 32,
+                        size: 4,
+                      },
+                    ].map((row) => {
+                      const total = teamMatchTotal(row.players, row.size);
+                      const knockout = 20;
+                      const usual = row.players === 24 && row.size === 4;
+
+                      return (
+                        <tr
+                          key={row.label}
+                          className="border-t border-slate-800"
+                        >
+                          <td className="px-6 py-3 font-semibold">
+                            {row.label}
+                          </td>
+                          <td className="px-3 py-3 text-center text-slate-300">
+                            {total - knockout}
+                          </td>
+                          <td className="px-3 py-3 text-center text-slate-300">
+                            {knockout}
+                          </td>
+                          <td
+                            className={`px-6 py-3 text-right font-black ${
+                              usual
+                                ? "text-yellow-400"
+                                : "text-emerald-400"
+                            }`}
+                          >
+                            {total}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             <section className="rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/40 to-slate-950 p-6">
               <h2 className="text-xl font-black text-yellow-400">
                 Champions
@@ -314,6 +674,133 @@ export default function TournamentFormatPage() {
                 fixture, not to individual rally-point totals.
               </p>
             </section>
+          </div>
+
+          <div
+            role="tabpanel"
+            className={`space-y-6 transition-all duration-300 ease-out ${
+              tab === "split_pairs"
+                ? "translate-x-0 opacity-100"
+                : "pointer-events-none absolute inset-x-0 top-0 translate-x-6 opacity-0"
+            }`}
+          >
+            <section className="rounded-2xl border border-purple-800 bg-purple-950/20 p-6">
+              <h2 className="text-xl font-black">
+                20-player Split Pairs
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                This format begins as an individual event, then locks
+                players into balanced doubles pairs for two parallel
+                draws: Championship and Plate.
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <div className="text-xs uppercase tracking-widest text-slate-500">
+                    Players
+                  </div>
+                  <div className="mt-1 font-bold">Exactly 20</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <div className="text-xs uppercase tracking-widest text-slate-500">
+                    Prelims
+                  </div>
+                  <div className="mt-1 font-bold">5 random rounds</div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <div className="text-xs uppercase tracking-widest text-slate-500">
+                    Winners
+                  </div>
+                  <div className="mt-1 font-bold">One per draw</div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+              <h2 className="text-xl font-black">
+                Tournament stages
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                The field splits in two after the prelims and the
+                draws never meet again.
+              </p>
+              <div className="mt-4">
+                <FormatDiagram
+                  accent="#c084fc"
+                  label="Split pairs stages: five random prelim rounds, rank split, Championship and Plate fixed pairs, round robins, semifinals, and two finals."
+                  steps={splitPairSteps}
+                />
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+              <h2 className="text-xl font-black">
+                1. Random preliminary rounds
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                All 20 players receive completely random partners and
+                opponents for five rounds. Each player receives half
+                of their team&apos;s rally score. Player rankings use
+                tournament points, then wins, point difference, and
+                points scored.
+              </p>
+              <p className="mt-3 text-sm text-slate-400">
+                Prelim games are first to 21 with a golden point at
+                20-20.
+              </p>
+            </section>
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+              <h2 className="text-xl font-black">
+                2. Rank split and fixed pairs
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                Ranks 1–10 enter the Championship draw. Ranks 11–20
+                enter the Plate draw. Inside each draw, the fixed pairs
+                are 1+10, 2+9, 3+8, 4+7, and 5+6. Partners remain
+                together for the rest of the tournament.
+              </p>
+            </section>
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+              <h2 className="text-xl font-black">
+                3. Fixed-pair round robin
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                The five pairs in each draw play all four other pairs.
+                A win earns 2 standing points. Ties are broken by
+                match point difference, then total points scored.
+              </p>
+              <p className="mt-3 text-sm text-slate-400">
+                These matches are first to 21, win by 2, with a cap
+                of 30.
+              </p>
+            </section>
+
+            <section className="rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/40 to-slate-950 p-6">
+              <h2 className="text-xl font-black text-yellow-400">
+                4. Parallel semifinals and finals
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                The top four pairs in each draw advance. Semifinals
+                are 1 vs 4 and 2 vs 3. The winners play a final in
+                their own draw, producing a Championship winner and
+                runner-up plus a Plate winner and runner-up.
+              </p>
+            </section>
+
+            <MatchCounts
+              rows={[
+                { label: "5 random prelim rounds", count: 25 },
+                { label: "Championship round robin", count: 10 },
+                { label: "Plate round robin", count: 10 },
+                { label: "Championship semifinals", count: 2 },
+                { label: "Plate semifinals", count: 2 },
+                { label: "Championship final", count: 1 },
+                { label: "Plate final", count: 1 },
+              ]}
+              total={51}
+              note="This format is always 20 players, so the match count never changes."
+            />
           </div>
         </div>
 

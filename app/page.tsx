@@ -21,6 +21,13 @@ import {
   teamLayout,
   type TeamSize,
 } from "../lib/teamTournament";
+import {
+  createFixedPairSeeds,
+  poolLabel,
+  rankPrelimPlayers,
+  SPLIT_PAIR_PLAYER_COUNT,
+  SPLIT_PAIR_PRELIM_ROUNDS,
+} from "../lib/splitPairsTournament";
 
 type Player = {
   id: string;
@@ -115,7 +122,7 @@ export default function HomePage() {
     useState(3);
 
   const [tournamentFormat, setTournamentFormat] =
-    useState<"individual" | "team_groups">("individual");
+    useState<"individual" | "team_groups" | "split_pairs">("individual");
 
   const [teamSize, setTeamSize] =
     useState<TeamSize>(4);
@@ -163,11 +170,15 @@ export default function HomePage() {
     const params = new URLSearchParams(window.location.search);
 
     if (params.get("create") === "1") {
+      // Initialize the form from the URL once on mount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowCreateForm(true);
     }
   }, []);
 
   useEffect(() => {
+    // Keep the controlled input list aligned with the selected size.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setManualPlayers((current) =>
       Array.from(
         { length: playerCount },
@@ -185,10 +196,27 @@ export default function HomePage() {
       return;
     }
 
+    if (tournamentFormat === "split_pairs") {
+      if (playerCount !== SPLIT_PAIR_PLAYER_COUNT) {
+        setPlayerCount(SPLIT_PAIR_PLAYER_COUNT);
+      }
+
+      if (preliminaryRounds !== SPLIT_PAIR_PRELIM_ROUNDS) {
+        setPreliminaryRounds(SPLIT_PAIR_PRELIM_ROUNDS);
+      }
+
+      return;
+    }
+
     if (![16, 24, 32].includes(playerCount)) {
       setPlayerCount(24);
     }
-  }, [tournamentFormat, teamSize, playerCount]);
+  }, [
+    tournamentFormat,
+    teamSize,
+    playerCount,
+    preliminaryRounds,
+  ]);
 
   /*
    * Load tournament and current round.
@@ -392,6 +420,16 @@ export default function HomePage() {
         return;
       }
 
+      if (
+        tournamentFormat === "split_pairs" &&
+        playerCount !== SPLIT_PAIR_PLAYER_COUNT
+      ) {
+        setStatus(
+          `Split Pairs requires exactly ${SPLIT_PAIR_PLAYER_COUNT} players.`
+        );
+        return;
+      }
+
       if (tournamentFormat === "team_groups") {
         const layout = teamLayout(playerCount, teamSize);
 
@@ -416,10 +454,16 @@ export default function HomePage() {
             preliminary_rounds:
               tournamentFormat === "team_groups"
                 ? 1
+                : tournamentFormat === "split_pairs"
+                  ? SPLIT_PAIR_PRELIM_ROUNDS
                 : preliminaryRounds,
             courts,
             qualification_count:
-              tournamentFormat === "team_groups" ? 4 : 16,
+              tournamentFormat === "team_groups"
+                ? 4
+                : tournamentFormat === "split_pairs"
+                  ? 8
+                  : 16,
             status: "setup",
             format: tournamentFormat,
             team_size:
@@ -946,6 +990,100 @@ export default function HomePage() {
     );
   }
 
+  async function createSplitPairsFromStandings() {
+    if (!tournament) {
+      throw new Error("No active tournament.");
+    }
+
+    const rankedStandings = rankPrelimPlayers(standings);
+
+    if (rankedStandings.length !== SPLIT_PAIR_PLAYER_COUNT) {
+      throw new Error(
+        `All ${SPLIT_PAIR_PLAYER_COUNT} player standings are required before creating fixed pairs.`
+      );
+    }
+
+    const { count, error: existingError } = await supabase
+      .from("fixed_pairs")
+      .select("id", { count: "exact", head: true })
+      .eq("tournament_id", tournament.id);
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    if ((count || 0) > 0) {
+      window.location.href = "/split-pairs-center";
+      return;
+    }
+
+    const seeds = createFixedPairSeeds(
+      rankedStandings.map((standing) => standing.player_id)
+    );
+
+    for (const [index, standing] of rankedStandings.entries()) {
+      const { error: rankError } = await supabase
+        .from("player_standings")
+        .update({ rank: index + 1 })
+        .eq("tournament_id", tournament.id)
+        .eq("player_id", standing.player_id);
+
+      if (rankError) {
+        throw rankError;
+      }
+    }
+
+    for (const seed of seeds) {
+      const { data: pair, error: pairError } = await supabase
+        .from("fixed_pairs")
+        .insert({
+          tournament_id: tournament.id,
+          pool_name: seed.pool_name,
+          seed: seed.seed,
+          name: `${poolLabel(seed.pool_name)} Pair ${seed.seed}`,
+        })
+        .select()
+        .single();
+
+      if (pairError) {
+        throw pairError;
+      }
+
+      const { error: playersError } = await supabase
+        .from("fixed_pair_players")
+        .insert(
+          seed.player_ids.map((playerId, index) => ({
+            pair_id: pair.id,
+            player_id: playerId,
+            slot: index + 1,
+          }))
+        );
+
+      if (playersError) {
+        throw playersError;
+      }
+
+      const { error: standingError } = await supabase
+        .from("fixed_pair_standings")
+        .insert({
+          tournament_id: tournament.id,
+          pair_id: pair.id,
+          matches_played: 0,
+          wins: 0,
+          losses: 0,
+          standing_points: 0,
+          points_for: 0,
+          points_against: 0,
+        });
+
+      if (standingError) {
+        throw standingError;
+      }
+    }
+
+    window.location.href = "/split-pairs-center";
+  }
+
   /*
    * Generate next round.
    */
@@ -977,6 +1115,26 @@ export default function HomePage() {
         currentRound.round_number <
           tournament.preliminary_rounds
       ) {
+        if (tournament.format === "split_pairs") {
+          const pairings = generateRandomPairings(
+            players.map((player) => ({
+              id: player.id,
+              name: player.name,
+            }))
+          );
+
+          await createRound(
+            currentRound.round_number + 1,
+            "preliminary",
+            pairings
+          );
+
+          setStatus(
+            `Round ${currentRound.round_number + 1} generated with completely random pairings.`
+          );
+          return;
+        }
+
         const historicalPlayers =
           await getHistoricalMatchPlayers();
 
@@ -1032,6 +1190,11 @@ export default function HomePage() {
         currentRound.round_number ===
           tournament.preliminary_rounds
       ) {
+        if (tournament.format === "split_pairs") {
+          await createSplitPairsFromStandings();
+          return;
+        }
+
         const top16 = getTop16();
 
         if (top16.length < 16) {
@@ -1733,6 +1896,7 @@ export default function HomePage() {
         );
 
   const top16 =
+    tournament?.format !== "split_pairs" &&
     currentRound &&
     currentRound.round_type ===
       "preliminary" &&
@@ -1760,6 +1924,12 @@ export default function HomePage() {
         (tournament?.preliminary_rounds ||
           0)
     ) {
+      if (tournament?.format === "split_pairs") {
+        return `Generate Random Round ${
+          currentRound.round_number + 1
+        }`;
+      }
+
       return `Generate Round ${
         currentRound.round_number + 1
       } — Intelligent Pairing`;
@@ -1771,6 +1941,10 @@ export default function HomePage() {
       currentRound.round_number ===
         tournament?.preliminary_rounds
     ) {
+      if (tournament?.format === "split_pairs") {
+        return "Create Fixed Pairs";
+      }
+
       return "Generate Quarterfinals — Top 16";
     }
 
@@ -1813,6 +1987,10 @@ export default function HomePage() {
 
   function goTeamCenter() {
     window.location.href = "/team-center";
+  }
+
+  function goSplitPairsCenter() {
+    window.location.href = "/split-pairs-center";
   }
 
   async function removeActiveTournament() {
@@ -1936,7 +2114,7 @@ export default function HomePage() {
               </button>
             </div>
 
-            <div className="mb-5 grid gap-3 md:grid-cols-2">
+            <div className="mb-5 grid gap-3 md:grid-cols-3">
               <button
                 type="button"
                 onClick={() =>
@@ -1951,6 +2129,24 @@ export default function HomePage() {
                 <div className="font-black">Individual doubles</div>
                 <p className="mt-1 text-sm text-slate-400">
                   Mixed pairings, individual points, Top 16 knockout.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setTournamentFormat("split_pairs")
+                }
+                className={`rounded-xl border p-4 text-left ${
+                  tournamentFormat === "split_pairs"
+                    ? "border-emerald-600 bg-emerald-950/40"
+                    : "border-slate-800 bg-slate-950"
+                }`}
+              >
+                <div className="font-black">Split pairs</div>
+                <p className="mt-1 text-sm text-slate-400">
+                  20 players, 5 random rounds, then Championship and
+                  Plate draws.
                 </p>
               </button>
 
@@ -2008,7 +2204,9 @@ export default function HomePage() {
                 >
                   {(tournamentFormat === "team_groups"
                     ? playerCountsForTeamSize(teamSize)
-                    : [16, 24, 32]
+                    : tournamentFormat === "split_pairs"
+                      ? [SPLIT_PAIR_PLAYER_COUNT]
+                      : [16, 24, 32]
                   ).map((count) => (
                     <option key={count} value={count}>
                       {count} Players
@@ -2034,6 +2232,22 @@ export default function HomePage() {
                 >
                   <option value={3}>3 Players</option>
                   <option value={4}>4 Players</option>
+                </select>
+              </div>
+              ) : tournamentFormat === "split_pairs" ? (
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-slate-300">
+                  Preliminary Rounds
+                </label>
+
+                <select
+                  value={SPLIT_PAIR_PRELIM_ROUNDS}
+                  disabled
+                  className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base disabled:opacity-70"
+                >
+                  <option value={SPLIT_PAIR_PRELIM_ROUNDS}>
+                    {SPLIT_PAIR_PRELIM_ROUNDS} Random Rounds
+                  </option>
                 </select>
               </div>
               ) : (
@@ -2111,6 +2325,16 @@ export default function HomePage() {
 
                   return `${layout.teamCount} teams of ${teamSize} · Group A (${layout.groupSize}) and Group B (${layout.groupSize}) · 5 doubles per fixture · match wins only · top 2 per group to semis (A1 vs B2, A2 vs B1). Players are assigned in order: 1-${teamSize} become Team A.`;
                 })()}
+              </div>
+            )}
+
+            {tournamentFormat === "split_pairs" && (
+              <div className="mt-5 rounded-xl border border-purple-800 bg-purple-950/20 p-4 text-sm leading-6 text-slate-300">
+                Five completely random rounds rank all 20 players.
+                Ranks 1–10 enter the Championship draw and 11–20
+                enter the Plate draw. Each draw creates fixed pairs
+                1+10, 2+9, 3+8, 4+7, and 5+6, then runs its own
+                round robin, semifinals, and final.
               </div>
             )}
 
@@ -2345,6 +2569,64 @@ export default function HomePage() {
               {status}
             </div>
           )}
+        </div>
+      </main>
+    );
+  }
+
+  if (
+    tournament.format === "split_pairs" &&
+    currentRound &&
+    currentRound.round_type !== "preliminary"
+  ) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-white">
+        <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
+          <header className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-3xl font-black">🏸 Baddy Smash</h1>
+              <p className="mt-2 text-slate-400">
+                {tournament.name} · Split Pairs format
+              </p>
+            </div>
+            <AppNav
+              links={[
+                "split-pairs-center",
+                "standings",
+                "history",
+                "format",
+                "new",
+              ]}
+            />
+          </header>
+
+          <section className="rounded-2xl border border-purple-800 bg-purple-950/20 p-6">
+            <div className="text-xs font-bold uppercase tracking-widest text-purple-300">
+              Active Split Pairs Tournament
+            </div>
+            <h2 className="mt-3 text-2xl font-black">
+              Fixed-pair stage in progress
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Continue the Championship and Plate round robins and
+              parallel knockout brackets in Split Pairs Center.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button
+                onClick={goSplitPairsCenter}
+                className="min-h-11 rounded-lg bg-emerald-600 px-5 py-2 font-bold hover:bg-emerald-500"
+              >
+                🔀 Open Split Pairs Center
+              </button>
+              <button
+                onClick={removeActiveTournament}
+                disabled={deletingTournament}
+                className="min-h-11 rounded-lg border border-red-800 px-5 py-2 font-bold text-red-400 hover:bg-red-950 disabled:opacity-50"
+              >
+                {deletingTournament ? "Deleting..." : "🗑️ Delete"}
+              </button>
+            </div>
+          </section>
         </div>
       </main>
     );
@@ -2983,7 +3265,8 @@ export default function HomePage() {
                 </div>
               )}
 
-            {top16.length === 16 && (
+            {tournament.format !== "split_pairs" &&
+              top16.length === 16 && (
               <div className="mt-8 rounded-2xl border border-purple-800 bg-purple-950/20 p-5 sm:p-6">
                 <h2 className="text-xl font-bold text-purple-300 sm:text-2xl">
                   🏆 Top 16 Qualified

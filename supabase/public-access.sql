@@ -29,7 +29,10 @@ begin
     'teams',
     'team_players',
     'team_standings',
-    'fixtures'
+    'fixtures',
+    'fixed_pairs',
+    'fixed_pair_players',
+    'fixed_pair_standings'
   ]
   loop
     if exists (

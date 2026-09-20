@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 export type NavTarget =
   | "control-center"
   | "team-center"
+  | "split-pairs-center"
   | "leaderboard"
   | "standings"
   | "history"
@@ -32,6 +33,11 @@ const navItems: Record<
   "team-center": {
     label: "👥 Team Center",
     href: "/team-center",
+    className: primaryClass,
+  },
+  "split-pairs-center": {
+    label: "🔀 Split Pairs Center",
+    href: "/split-pairs-center",
     className: primaryClass,
   },
   leaderboard: {

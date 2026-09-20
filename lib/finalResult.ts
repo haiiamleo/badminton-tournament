@@ -67,3 +67,45 @@ export function getDoublesFinalResult<TPlayer>(
         : finalMatch.team1_score,
   };
 }
+
+export function getSplitPairFinalResults(
+  rounds: { id: string; round_type: string }[],
+  matches: {
+    round_id: string;
+    fixed_pair1_id?: string | null;
+    fixed_pair2_id?: string | null;
+    winner_team: number | null;
+    team1_score: number | null;
+    team2_score: number | null;
+  }[],
+  pairPools: Map<string, string>
+) {
+  const finalRound = rounds.find(
+    (round) => round.round_type === "split_final"
+  );
+
+  if (!finalRound) {
+    return [];
+  }
+
+  return matches
+    .filter(
+      (match) =>
+        match.round_id === finalRound.id &&
+        (match.winner_team === 1 || match.winner_team === 2)
+    )
+    .map((match) => {
+      const pair1Id = match.fixed_pair1_id || "";
+      const pair2Id = match.fixed_pair2_id || "";
+
+      return {
+        pool: pairPools.get(pair1Id) || pairPools.get(pair2Id) || "",
+        championPairId:
+          match.winner_team === 1 ? pair1Id : pair2Id,
+        runnerUpPairId:
+          match.winner_team === 1 ? pair2Id : pair1Id,
+        team1Score: match.team1_score,
+        team2Score: match.team2_score,
+      };
+    });
+}

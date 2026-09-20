@@ -293,6 +293,8 @@ export default function TeamCenterPage() {
   }, []);
 
   useEffect(() => {
+    // Synchronize the page with the active tournament on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 

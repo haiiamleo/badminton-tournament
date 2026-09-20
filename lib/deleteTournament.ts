@@ -79,6 +79,40 @@ export async function deleteTournament(tournamentId: string) {
     }
   }
 
+  const { data: fixedPairs, error: fixedPairsError } = await supabase
+    .from("fixed_pairs")
+    .select("id")
+    .eq("tournament_id", tournamentId);
+
+  if (fixedPairsError && !isMissingRelation(fixedPairsError)) {
+    throw fixedPairsError;
+  }
+
+  const fixedPairIds = (fixedPairs || []).map((pair) => pair.id);
+
+  await deleteRows("fixed_pair_players", "pair_id", fixedPairIds);
+
+  const { error: fixedPairStandingsError } = await supabase
+    .from("fixed_pair_standings")
+    .delete()
+    .eq("tournament_id", tournamentId);
+
+  if (
+    fixedPairStandingsError &&
+    !isMissingRelation(fixedPairStandingsError)
+  ) {
+    throw fixedPairStandingsError;
+  }
+
+  const { error: fixedPairDeleteError } = await supabase
+    .from("fixed_pairs")
+    .delete()
+    .eq("tournament_id", tournamentId);
+
+  if (fixedPairDeleteError && !isMissingRelation(fixedPairDeleteError)) {
+    throw fixedPairDeleteError;
+  }
+
   const { data: teams, error: teamsError } = await supabase
     .from("teams")
     .select("id")
