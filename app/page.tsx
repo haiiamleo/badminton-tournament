@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
-import LogoutButton from "@/app/components/LogoutButton";
 import AppNav from "@/app/components/AppNav";
 import {
   generateIntelligentPairings,
@@ -361,20 +360,6 @@ export default function HomePage() {
       setLoading(true);
       setStatus("");
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) {
-        throw userError;
-      }
-
-      if (!user) {
-        window.location.href = "/login";
-        return;
-      }
-
       const names = getPlayerNames();
 
       if (!tournamentName.trim()) {
@@ -419,8 +404,8 @@ export default function HomePage() {
       }
 
       /*
-       * Authentication is required, but tournaments
-       * are shared between all authenticated organizers.
+       * Closed group: tournaments are shared with anyone
+       * who has the app URL. Login is not required.
        */
       const { data: tournamentData, error: tournamentError } =
         await supabase
@@ -1869,7 +1854,7 @@ export default function HomePage() {
           <div className="mb-8 flex flex-col gap-5 lg:mb-10 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <h1 className="text-3xl font-bold leading-tight sm:text-4xl">
-                🏸 Badminton Tournament Manager
+                🏸 Baddy Smash
               </h1>
 
               <p className="mt-3 text-sm leading-6 text-slate-400 sm:text-base">
@@ -1878,9 +1863,7 @@ export default function HomePage() {
               </p>
             </div>
 
-            <AppNav links={["history", "format"]}>
-              <LogoutButton />
-            </AppNav>
+            <AppNav links={["history", "format"]} />
           </div>
 
           <div className="mb-6 grid gap-4 sm:mb-8 md:grid-cols-2">
@@ -2273,7 +2256,7 @@ export default function HomePage() {
           <div className="mb-6 flex flex-col gap-5 lg:mb-8 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <h1 className="text-2xl font-bold leading-tight sm:text-3xl">
-                🏸 Badminton Tournament Manager
+                🏸 Baddy Smash
               </h1>
               <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">
                 Team groups format. Run fixtures from Team Center.
@@ -2399,7 +2382,7 @@ export default function HomePage() {
         <div className="mb-6 flex flex-col gap-5 lg:mb-8 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-bold leading-tight sm:text-3xl">
-              🏸 Badminton Tournament Manager
+              🏸 Baddy Smash
             </h1>
 
             <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">

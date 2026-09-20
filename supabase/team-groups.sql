@@ -61,21 +61,25 @@ alter table team_standings enable row level security;
 alter table fixtures enable row level security;
 
 drop policy if exists teams_authenticated_all on teams;
-create policy teams_authenticated_all
-on teams for all to authenticated
+drop policy if exists teams_public_all on teams;
+create policy teams_public_all
+on teams for all to anon, authenticated
 using (true) with check (true);
 
 drop policy if exists team_players_authenticated_all on team_players;
-create policy team_players_authenticated_all
-on team_players for all to authenticated
+drop policy if exists team_players_public_all on team_players;
+create policy team_players_public_all
+on team_players for all to anon, authenticated
 using (true) with check (true);
 
 drop policy if exists team_standings_authenticated_all on team_standings;
-create policy team_standings_authenticated_all
-on team_standings for all to authenticated
+drop policy if exists team_standings_public_all on team_standings;
+create policy team_standings_public_all
+on team_standings for all to anon, authenticated
 using (true) with check (true);
 
 drop policy if exists fixtures_authenticated_all on fixtures;
-create policy fixtures_authenticated_all
-on fixtures for all to authenticated
+drop policy if exists fixtures_public_all on fixtures;
+create policy fixtures_public_all
+on fixtures for all to anon, authenticated
 using (true) with check (true);

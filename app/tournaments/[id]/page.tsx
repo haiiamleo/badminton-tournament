@@ -994,7 +994,7 @@ export default function HistoricalTournamentPage() {
               onClick={goHome}
               className="rounded-lg border border-slate-700 px-5 py-2 text-sm font-bold hover:bg-slate-800"
             >
-              🏠 Tournament Manager
+              🏠 Baddy Smash
             </button>
 
             <button

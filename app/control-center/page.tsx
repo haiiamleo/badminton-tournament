@@ -1640,7 +1640,7 @@ export default function ControlCenterPage() {
           </div>
 
           <div className="mt-4 text-center text-xs text-slate-600">
-            Badminton Tournament Control Center
+            Baddy Smash Control Center
           </div>
         </footer>
       </div>
