@@ -776,39 +776,12 @@ export default function HomePage() {
       setLoading(true);
       setStatus("");
 
-      const shuffled = [...players];
-
-      for (
-        let i = shuffled.length - 1;
-        i > 0;
-        i--
-      ) {
-        const j = Math.floor(
-          Math.random() * (i + 1)
-        );
-
-        [shuffled[i], shuffled[j]] =
-          [shuffled[j], shuffled[i]];
-      }
-
-      const pairings: Pairing[] = [];
-
-      for (
-        let i = 0;
-        i < shuffled.length;
-        i += 4
-      ) {
-        pairings.push({
-          team1: [
-            shuffled[i].id,
-            shuffled[i + 1].id,
-          ],
-          team2: [
-            shuffled[i + 2].id,
-            shuffled[i + 3].id,
-          ],
-        });
-      }
+      const pairings = await generateRandomPairings(
+        players.map((player) => ({
+          id: player.id,
+          name: player.name,
+        }))
+      );
 
       await createRound(
         1,
@@ -1116,7 +1089,7 @@ export default function HomePage() {
           tournament.preliminary_rounds
       ) {
         if (tournament.format === "split_pairs") {
-          const pairings = generateRandomPairings(
+          const pairings = await generateRandomPairings(
             players.map((player) => ({
               id: player.id,
               name: player.name,
@@ -1204,7 +1177,7 @@ export default function HomePage() {
         }
 
         const pairings =
-          generateRandomPairings(
+          await generateRandomPairings(
             top16.map((player) => ({
               id: player.id,
               name: player.name,
@@ -1277,7 +1250,7 @@ export default function HomePage() {
             );
 
         const pairings =
-          generateRandomPairings(
+          await generateRandomPairings(
             winnerPlayers.map((player) => ({
               id: player.id,
               name: player.name,
@@ -1350,7 +1323,7 @@ export default function HomePage() {
             );
 
         const pairings =
-          generateRandomPairings(
+          await generateRandomPairings(
             winnerPlayers.map((player) => ({
               id: player.id,
               name: player.name,

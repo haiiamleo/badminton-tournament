@@ -235,29 +235,67 @@ export function generateIntelligentPairings(
   return bestPairings;
 }
 
-export function generateRandomPairings(
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function hashText(value: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value)
+  );
+
+  return bytesToHex(new Uint8Array(digest));
+}
+
+/*
+ * Shuffle by hashing each player with a fresh CSPRNG salt, then
+ * sorting on the digest. SHA-256 mixes names and IDs evenly, so
+ * list order never leaks into the draw.
+ */
+async function shuffleByPlayerHash<T extends { id: string; name: string }>(
+  items: T[]
+) {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const saltHex = bytesToHex(salt);
+
+  const ranked = await Promise.all(
+    items.map(async (item) => ({
+      item,
+      hash: await hashText(`${saltHex}:${item.id}:${item.name}`),
+    }))
+  );
+
+  ranked.sort((a, b) => {
+    if (a.hash !== b.hash) {
+      return a.hash < b.hash ? -1 : 1;
+    }
+
+    return a.item.id.localeCompare(b.item.id);
+  });
+
+  return ranked.map((entry) => entry.item);
+}
+
+export async function generateRandomPairings(
   players: EnginePlayer[]
-): Pairing[] {
+): Promise<Pairing[]> {
   if (players.length % 4 !== 0) {
     throw new Error(
       `Player count must be divisible by 4. Received ${players.length}.`
     );
   }
 
-  const shuffled = shuffle(players);
-
+  const shuffled = await shuffleByPlayerHash(players);
   const pairings: Pairing[] = [];
 
   for (let i = 0; i < shuffled.length; i += 4) {
     pairings.push({
-      team1: [
-        shuffled[i].id,
-        shuffled[i + 1].id,
-      ],
-      team2: [
-        shuffled[i + 2].id,
-        shuffled[i + 3].id,
-      ],
+      team1: [shuffled[i].id, shuffled[i + 1].id],
+      team2: [shuffled[i + 2].id, shuffled[i + 3].id],
     });
   }
 
