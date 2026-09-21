@@ -9,6 +9,7 @@ import {
   type Pairing,
 } from "../lib/tournamentEngine";
 import { deleteTournament } from "../lib/deleteTournament";
+import { describeError } from "../lib/errorMessage";
 import { formatDoublesTeam } from "../lib/finalResult";
 import {
   sanitizeScoreInput,
@@ -1355,9 +1356,7 @@ export default function HomePage() {
       console.error(error);
 
       setStatus(
-        error instanceof Error
-          ? error.message
-          : "Unable to generate the next round."
+        describeError(error, "Unable to generate the next round.")
       );
     } finally {
       setGeneratingNextRound(false);

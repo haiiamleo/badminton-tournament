@@ -40,6 +40,45 @@ add column if not exists fixed_pair1_id uuid references fixed_pairs(id);
 alter table matches
 add column if not exists fixed_pair2_id uuid references fixed_pairs(id);
 
+-- The original schema restricted round_type to the individual-format
+-- stages, so the new split-pair stages are rejected on insert.
+-- Drop any such check and recreate it with every stage the app uses.
+do $$
+declare
+  existing_constraint text;
+begin
+  for existing_constraint in
+    select con.conname
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace nsp on nsp.oid = rel.relnamespace
+    where nsp.nspname = 'public'
+      and rel.relname = 'rounds'
+      and con.contype = 'c'
+      and pg_get_constraintdef(con.oid) ilike '%round_type%'
+  loop
+    execute format(
+      'alter table public.rounds drop constraint %I',
+      existing_constraint
+    );
+  end loop;
+end $$;
+
+alter table rounds
+add constraint rounds_round_type_check
+check (
+  round_type in (
+    'preliminary',
+    'quarterfinal',
+    'semifinal',
+    'third_place',
+    'final',
+    'pair_round_robin',
+    'split_semifinal',
+    'split_final'
+  )
+);
+
 alter table fixed_pairs enable row level security;
 alter table fixed_pair_players enable row level security;
 alter table fixed_pair_standings enable row level security;

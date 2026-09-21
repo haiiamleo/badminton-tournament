@@ -16,6 +16,7 @@ import {
   scoreRuleHint,
   validateCompletedScore,
 } from "@/lib/scoreValidation";
+import { describeError } from "@/lib/errorMessage";
 
 type Tournament = {
   id: string;
@@ -230,9 +231,10 @@ export default function SplitPairsCenterPage() {
     } catch (loadError: unknown) {
       console.error(loadError);
       setError(
-        loadError instanceof Error
-          ? loadError.message
-          : "Unable to load the Split Pairs tournament."
+        describeError(
+          loadError,
+          "Unable to load the Split Pairs tournament."
+        )
       );
     } finally {
       setLoading(false);
@@ -391,9 +393,10 @@ export default function SplitPairsCenterPage() {
     } catch (generateError: unknown) {
       console.error(generateError);
       setError(
-        generateError instanceof Error
-          ? generateError.message
-          : "Unable to generate the round robin."
+        describeError(
+          generateError,
+          "Unable to generate the round robin."
+        )
       );
       setWorking(false);
     }
@@ -425,9 +428,7 @@ export default function SplitPairsCenterPage() {
     } catch (generateError: unknown) {
       console.error(generateError);
       setError(
-        generateError instanceof Error
-          ? generateError.message
-          : "Unable to generate semifinals."
+        describeError(generateError, "Unable to generate semifinals.")
       );
       setWorking(false);
     }
@@ -483,9 +484,7 @@ export default function SplitPairsCenterPage() {
     } catch (generateError: unknown) {
       console.error(generateError);
       setError(
-        generateError instanceof Error
-          ? generateError.message
-          : "Unable to generate finals."
+        describeError(generateError, "Unable to generate finals.")
       );
       setWorking(false);
     }
@@ -636,9 +635,7 @@ export default function SplitPairsCenterPage() {
     } catch (saveError: unknown) {
       console.error(saveError);
       setError(
-        saveError instanceof Error
-          ? saveError.message
-          : "Unable to save the result."
+        describeError(saveError, "Unable to save the result.")
       );
       setWorking(false);
     }
