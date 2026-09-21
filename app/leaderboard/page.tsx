@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import AppNav from "@/app/components/AppNav";
+import { describeError } from "@/lib/errorMessage";
 import { rankTeams } from "@/lib/teamTournament";
 import {
   poolLabel,
@@ -57,6 +58,12 @@ export default function LeaderboardPage() {
   const [rows, setRows] = useState<LeaderboardRow[]>([]);
   const [teamRows, setTeamRows] = useState<TeamRow[]>([]);
   const [pairRows, setPairRows] = useState<PairRow[]>([]);
+  const [playerPools, setPlayerPools] = useState<
+    Record<string, SplitPool>
+  >({});
+  const [splitView, setSplitView] = useState<"prelims" | "pairs">(
+    "prelims"
+  );
   const [format, setFormat] = useState<
     "individual" | "team_groups" | "split_pairs"
   >("individual");
@@ -193,8 +200,18 @@ export default function LeaderboardPage() {
           (fixedPairs || []).map((pair) => [pair.id, pair])
         );
 
-        setPairRows(
-          rankFixedPairs(pairStandings || []).map((standing) => {
+        const pools: Record<string, SplitPool> = {};
+
+        memberRows.forEach((member) => {
+          const pool = fixedPairMap.get(member.pair_id)?.pool_name;
+
+          if (pool) {
+            pools[member.player_id] = pool as SplitPool;
+          }
+        });
+
+        const ranked = rankFixedPairs(pairStandings || []).map(
+          (standing) => {
             const pair = fixedPairMap.get(standing.pair_id);
 
             return {
@@ -208,10 +225,22 @@ export default function LeaderboardPage() {
                 )
                 .join(" + "),
             };
-          })
+          }
+        );
+
+        setPlayerPools(pools);
+        setPairRows(ranked);
+
+        // Pair results only exist once the round robins start, so open
+        // on the prelim ranking until a pair has actually played.
+        setSplitView(
+          ranked.some((row) => row.matches_played > 0)
+            ? "pairs"
+            : "prelims"
         );
       } else {
         setPairRows([]);
+        setPlayerPools({});
       }
 
       const { data: standings, error: standingsError } =
@@ -273,15 +302,14 @@ export default function LeaderboardPage() {
     } catch (error) {
       console.error(error);
 
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to load leaderboard."
-      );
+      setMessage(describeError(error, "Unable to load leaderboard."));
     } finally {
       setLoading(false);
     }
   }
+
+  const splitPairsReady = format === "split_pairs" && pairRows.length > 0;
+  const showPairStandings = splitPairsReady && splitView === "pairs";
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -291,8 +319,10 @@ export default function LeaderboardPage() {
             <h1 className="text-3xl font-bold">
               {format === "team_groups"
                 ? "👥 Team Standings"
-                : format === "split_pairs" && pairRows.length > 0
+                : showPairStandings
                   ? "🔀 Split Pair Standings"
+                : format === "split_pairs"
+                  ? "🏸 Preliminary Ranking"
                 : "🏸 Tournament Leaderboard"}
             </h1>
 
@@ -320,6 +350,29 @@ export default function LeaderboardPage() {
             </button>
           </AppNav>
         </div>
+
+        {splitPairsReady && !loading && !message && (
+          <div className="mb-6 inline-flex rounded-xl border border-slate-800 bg-slate-900 p-1">
+            {(
+              [
+                ["prelims", "🏸 Prelim ranking"],
+                ["pairs", "🔀 Pair standings"],
+              ] as const
+            ).map(([view, label]) => (
+              <button
+                key={view}
+                onClick={() => setSplitView(view)}
+                className={`min-h-11 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                  splitView === view
+                    ? "bg-emerald-600 text-white"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {loading ? (
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-400">
@@ -376,7 +429,7 @@ export default function LeaderboardPage() {
               </div>
             )}
           </div>
-        ) : format === "split_pairs" && pairRows.length > 0 ? (
+        ) : showPairStandings ? (
           <div className="grid gap-5 lg:grid-cols-2">
             {(["top", "bottom"] as SplitPool[]).map((pool) => (
               <section
@@ -436,6 +489,9 @@ export default function LeaderboardPage() {
                   <tr>
                     <th className="px-4 py-4">Rank</th>
                     <th className="px-4 py-4">Player</th>
+                    {splitPairsReady && (
+                      <th className="px-4 py-4 text-center">Draw</th>
+                    )}
                     <th className="px-4 py-4 text-center">Played</th>
                     <th className="px-4 py-4 text-center">Wins</th>
                     <th className="px-4 py-4 text-center">Losses</th>
@@ -452,7 +508,7 @@ export default function LeaderboardPage() {
                     <tr
                       key={row.player_id}
                       className={`border-t border-slate-800 ${
-                        format === "split_pairs" || row.rank <= 16
+                        row.rank <= (format === "split_pairs" ? 10 : 16)
                           ? "bg-emerald-950/20"
                           : ""
                       }`}
@@ -460,7 +516,7 @@ export default function LeaderboardPage() {
                       <td className="px-4 py-4 font-bold">
                         <span
                           className={
-                            format === "split_pairs" || row.rank <= 16
+                            row.rank <= (format === "split_pairs" ? 10 : 16)
                               ? "text-emerald-400"
                               : ""
                           }
@@ -472,6 +528,14 @@ export default function LeaderboardPage() {
                       <td className="px-4 py-4 font-semibold">
                         {row.player_name}
                       </td>
+
+                      {splitPairsReady && (
+                        <td className="px-4 py-4 text-center text-slate-300">
+                          {playerPools[row.player_id]
+                            ? poolLabel(playerPools[row.player_id])
+                            : "—"}
+                        </td>
+                      )}
 
                       <td className="px-4 py-4 text-center">
                         {row.matches_played}
