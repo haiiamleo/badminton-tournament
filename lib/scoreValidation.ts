@@ -22,7 +22,21 @@ export function sanitizeScoreInput(value: string) {
   return value;
 }
 
-export function scoreRuleHint(roundType: string | null | undefined) {
+export function scoreRuleHint(
+  roundType: string | null | undefined,
+  format?: string | null
+) {
+  const individualKnockout =
+    format !== "split_pairs" &&
+    format !== "team_groups" &&
+    (roundType === "quarterfinal" ||
+      roundType === "semifinal" ||
+      roundType === "final");
+
+  if (individualKnockout) {
+    return "Best of 3. Each game: first to 21, must win by 2. After 29-29, 30 is golden point.";
+  }
+
   if (isKnockoutRound(roundType)) {
     return "First to 21, must win by 2. After 29-29, 30 is golden point.";
   }

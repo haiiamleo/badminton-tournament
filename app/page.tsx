@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import AppNav from "@/app/components/AppNav";
 import {
-  generateIntelligentPairings,
   generateRandomPairings,
   type Pairing,
 } from "../lib/tournamentEngine";
@@ -16,6 +15,18 @@ import {
   scoreRuleHint,
   validateCompletedScore,
 } from "../lib/scoreValidation";
+import BestOfThreeScoreInputs from "@/app/components/BestOfThreeScoreInputs";
+import {
+  emptyGameInputs,
+  formatMatchScoreLine,
+  gameInputsFromMatch,
+  isValidIndividualPlayerCount,
+  INDIVIDUAL_MAX_PLAYERS,
+  INDIVIDUAL_MIN_PLAYERS,
+  resolveBestOfThree,
+  usesBestOfThree,
+  type GameScoreInput,
+} from "../lib/bestOfThree";
 import {
   playerCountsForTeamSize,
   splitIntoTeams,
@@ -54,6 +65,7 @@ type Match = {
   team2_score: number | null;
   winner_team: number | null;
   status: string;
+  game_scores?: unknown;
 };
 
 type Tournament = {
@@ -89,6 +101,7 @@ type Standing = {
 type ScoreState = {
   team1: string;
   team2: string;
+  games: GameScoreInput[];
 };
 
 export default function HomePage() {
@@ -205,12 +218,6 @@ export default function HomePage() {
       if (preliminaryRounds !== SPLIT_PAIR_PRELIM_ROUNDS) {
         setPreliminaryRounds(SPLIT_PAIR_PRELIM_ROUNDS);
       }
-
-      return;
-    }
-
-    if (![16, 24, 32].includes(playerCount)) {
-      setPlayerCount(24);
     }
   }, [
     tournamentFormat,
@@ -346,6 +353,7 @@ export default function HomePage() {
               match.team2_score === null
                 ? ""
                 : String(match.team2_score),
+            games: gameInputsFromMatch(match.game_scores),
           };
         });
 
@@ -414,9 +422,12 @@ export default function HomePage() {
         return;
       }
 
-      if (tournamentFormat === "individual" && playerCount % 4 !== 0) {
+      if (
+        tournamentFormat === "individual" &&
+        !isValidIndividualPlayerCount(playerCount)
+      ) {
         setStatus(
-          "Player count must be divisible by 4."
+          `Enter a player count from ${INDIVIDUAL_MIN_PLAYERS} to ${INDIVIDUAL_MAX_PLAYERS} that is divisible by 4.`
         );
         return;
       }
@@ -807,67 +818,6 @@ export default function HomePage() {
   }
 
   /*
-   * Retrieve all previous match-player history.
-   */
-  async function getHistoricalMatchPlayers() {
-    if (!tournament) {
-      return [];
-    }
-
-    const { data: rounds, error: roundsError } =
-      await supabase
-        .from("rounds")
-        .select("id")
-        .eq("tournament_id", tournament.id);
-
-    if (roundsError) {
-      throw roundsError;
-    }
-
-    const roundIds =
-      (rounds || []).map(
-        (round) => round.id
-      );
-
-    if (roundIds.length === 0) {
-      return [];
-    }
-
-    const { data: historicalMatches, error: matchesError } =
-      await supabase
-        .from("matches")
-        .select("id")
-        .in("round_id", roundIds);
-
-    if (matchesError) {
-      throw matchesError;
-    }
-
-    const matchIds =
-      (historicalMatches || []).map(
-        (match) => match.id
-      );
-
-    if (matchIds.length === 0) {
-      return [];
-    }
-
-    const { data: historicalPlayers, error: playerError } =
-      await supabase
-        .from("match_players")
-        .select(
-          "match_id, player_id, team_number"
-        )
-        .in("match_id", matchIds);
-
-    if (playerError) {
-      throw playerError;
-    }
-
-    return historicalPlayers || [];
-  }
-
-  /*
    * Determine top 16.
    */
   function getTop16(): Player[] {
@@ -1089,56 +1039,12 @@ export default function HomePage() {
         currentRound.round_number <
           tournament.preliminary_rounds
       ) {
-        if (tournament.format === "split_pairs") {
-          const pairings = await generateRandomPairings(
-            players.map((player) => ({
-              id: player.id,
-              name: player.name,
-            }))
-          );
-
-          await createRound(
-            currentRound.round_number + 1,
-            "preliminary",
-            pairings
-          );
-
-          setStatus(
-            `Round ${currentRound.round_number + 1} generated with completely random pairings.`
-          );
-          return;
-        }
-
-        const historicalPlayers =
-          await getHistoricalMatchPlayers();
-
-        const enginePlayers =
+        const pairings = await generateRandomPairings(
           players.map((player) => ({
             id: player.id,
             name: player.name,
-          }));
-
-        const engineStandings =
-          standings.map((standing) => ({
-            player_id:
-              standing.player_id,
-            tournament_points:
-              standing.tournament_points,
-            wins: standing.wins,
-            losses: standing.losses,
-            points_for:
-              standing.points_for,
-            points_against:
-              standing.points_against,
-          }));
-
-        const pairings =
-          generateIntelligentPairings(
-            enginePlayers,
-            engineStandings,
-            historicalPlayers,
-            5000
-          );
+          }))
+        );
 
         await createRound(
           currentRound.round_number + 1,
@@ -1147,9 +1053,7 @@ export default function HomePage() {
         );
 
         setStatus(
-          `Round ${
-            currentRound.round_number + 1
-          } generated using intelligent pairing.`
+          `Round ${currentRound.round_number + 1} generated with full random pairing.`
         );
 
         return;
@@ -1278,58 +1182,38 @@ export default function HomePage() {
         currentRound.round_type ===
         "semifinal"
       ) {
-        const winners: string[] = [];
+        const winningTeams: string[][] = [];
 
         for (const match of matches) {
           if (!match.winner_team) {
             continue;
           }
 
-          const teamPlayers =
-            matchPlayers.filter(
+          const teamPlayers = matchPlayers
+            .filter(
               (player) =>
-                player.match_id ===
-                  match.id &&
-                player.team_number ===
-                  match.winner_team
-            );
+                player.match_id === match.id &&
+                player.team_number === match.winner_team
+            )
+            .map((player) => player.player_id);
 
-          teamPlayers.forEach(
-            (player) =>
-              winners.push(
-                player.player_id
-              )
-          );
+          if (teamPlayers.length === 2) {
+            winningTeams.push(teamPlayers);
+          }
         }
 
-        if (winners.length !== 4) {
+        if (winningTeams.length !== 2) {
           throw new Error(
             "Both Semifinal matches must be completed before generating the Final."
           );
         }
 
-        const winnerPlayers =
-          winners
-            .map((id) =>
-              players.find(
-                (player) =>
-                  player.id === id
-              )
-            )
-            .filter(
-              (
-                player
-              ): player is Player =>
-                Boolean(player)
-            );
-
-        const pairings =
-          await generateRandomPairings(
-            winnerPlayers.map((player) => ({
-              id: player.id,
-              name: player.name,
-            }))
-          );
+        const pairings: Pairing[] = [
+          {
+            team1: winningTeams[0],
+            team2: winningTeams[1],
+          },
+        ];
 
         await createRound(
           currentRound.round_number + 1,
@@ -1338,7 +1222,7 @@ export default function HomePage() {
         );
 
         setStatus(
-          "Final generated."
+          "Final generated from the Semifinal winning pairs."
         );
 
         return;
@@ -1383,10 +1267,44 @@ export default function HomePage() {
         ...(previous[matchId] || {
           team1: "",
           team2: "",
+          games: emptyGameInputs(),
         }),
         [team]: sanitized,
       },
     }));
+  }
+
+  function updateGameScore(
+    matchId: string,
+    gameIndex: number,
+    team: "team1" | "team2",
+    value: string
+  ) {
+    setScores((previous) => {
+      const current = previous[matchId] || {
+        team1: "",
+        team2: "",
+        games: emptyGameInputs(),
+      };
+      const games = [...(current.games || emptyGameInputs())];
+
+      while (games.length < 3) {
+        games.push({ team1: "", team2: "" });
+      }
+
+      games[gameIndex] = {
+        ...games[gameIndex],
+        [team]: value,
+      };
+
+      return {
+        ...previous,
+        [matchId]: {
+          ...current,
+          games,
+        },
+      };
+    });
   }
 
   /*
@@ -1406,31 +1324,62 @@ export default function HomePage() {
         return;
       }
 
-      if (
-        score.team1 === "" ||
-        score.team2 === ""
-      ) {
-        setStatus(
-          "Please enter both scores."
-        );
-        return;
-      }
-
-      const team1Score =
-        Number(score.team1);
-
-      const team2Score =
-        Number(score.team2);
-
-      const scoreError = validateCompletedScore(
-        team1Score,
-        team2Score,
-        currentRound?.round_type
+      const bestOfThree = usesBestOfThree(
+        currentRound?.round_type,
+        tournament?.format
       );
 
-      if (scoreError) {
-        setStatus(scoreError);
-        return;
+      let team1Score: number;
+      let team2Score: number;
+      let winnerTeam: number;
+      let winnerPoints: number;
+      let loserPoints: number;
+      let gameScores: { team1: number; team2: number }[] | null = null;
+
+      if (bestOfThree) {
+        const result = resolveBestOfThree(score.games || emptyGameInputs());
+
+        if ("error" in result) {
+          setStatus(result.error);
+          return;
+        }
+
+        team1Score = result.team1Games;
+        team2Score = result.team2Games;
+        winnerTeam = result.winnerTeam;
+        winnerPoints =
+          (winnerTeam === 1 ? result.team1Rally : result.team2Rally) / 2;
+        loserPoints =
+          (winnerTeam === 1 ? result.team2Rally : result.team1Rally) / 2;
+        gameScores = result.games;
+      } else {
+        if (
+          score.team1 === "" ||
+          score.team2 === ""
+        ) {
+          setStatus(
+            "Please enter both scores."
+          );
+          return;
+        }
+
+        team1Score = Number(score.team1);
+        team2Score = Number(score.team2);
+
+        const scoreError = validateCompletedScore(
+          team1Score,
+          team2Score,
+          currentRound?.round_type
+        );
+
+        if (scoreError) {
+          setStatus(scoreError);
+          return;
+        }
+
+        winnerTeam = team1Score > team2Score ? 1 : 2;
+        winnerPoints = Math.max(team1Score, team2Score) / 2;
+        loserPoints = Math.min(team1Score, team2Score) / 2;
       }
 
       if (match.status === "completed") {
@@ -1439,27 +1388,6 @@ export default function HomePage() {
         );
         return;
       }
-
-      const winnerTeam =
-        team1Score > team2Score
-          ? 1
-          : 2;
-
-      const winnerScore =
-        winnerTeam === 1
-          ? team1Score
-          : team2Score;
-
-      const loserScore =
-        winnerTeam === 1
-          ? team2Score
-          : team1Score;
-
-      const winnerPoints =
-        winnerScore / 2;
-
-      const loserPoints =
-        loserScore / 2;
 
       const team1Players =
         matchPlayers.filter(
@@ -1501,6 +1429,7 @@ export default function HomePage() {
             winner_team:
               winnerTeam,
             status: "completed",
+            ...(gameScores ? { game_scores: gameScores } : {}),
           })
           .eq("id", match.id)
           .eq("status", "scheduled")
@@ -1904,7 +1833,7 @@ export default function HomePage() {
 
       return `Generate Round ${
         currentRound.round_number + 1
-      } — Intelligent Pairing`;
+      } — Full Random Pairing`;
     }
 
     if (
@@ -2100,7 +2029,7 @@ export default function HomePage() {
               >
                 <div className="font-black">Individual doubles</div>
                 <p className="mt-1 text-sm text-slate-400">
-                  Mixed pairings, individual points, Top 16 knockout.
+                  Mixed pairings, full random pairing, Top 16 knockout.
                 </p>
               </button>
 
@@ -2163,28 +2092,63 @@ export default function HomePage() {
                   Players
                 </label>
 
-                <select
-                  value={playerCount}
-                  onChange={(e) =>
-                    setPlayerCount(
-                      Number(
-                        e.target.value
+                {tournamentFormat === "individual" ? (
+                  <>
+                    <input
+                      type="number"
+                      min={INDIVIDUAL_MIN_PLAYERS}
+                      max={INDIVIDUAL_MAX_PLAYERS}
+                      step={4}
+                      value={playerCount || ""}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+
+                        if (raw === "") {
+                          setPlayerCount(0);
+                          return;
+                        }
+
+                        if (!/^\d+$/.test(raw)) {
+                          return;
+                        }
+
+                        setPlayerCount(
+                          Math.min(
+                            Number(raw),
+                            INDIVIDUAL_MAX_PLAYERS
+                          )
+                        );
+                      }}
+                      placeholder="24"
+                      className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base outline-none focus:border-emerald-500"
+                    />
+                    <p className="mt-2 text-xs leading-5 text-slate-500">
+                      Type any count from {INDIVIDUAL_MIN_PLAYERS} to{" "}
+                      {INDIVIDUAL_MAX_PLAYERS} that is divisible by 4.
+                    </p>
+                  </>
+                ) : (
+                  <select
+                    value={playerCount}
+                    onChange={(e) =>
+                      setPlayerCount(
+                        Number(
+                          e.target.value
+                        )
                       )
-                    )
-                  }
-                  className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base"
-                >
-                  {(tournamentFormat === "team_groups"
-                    ? playerCountsForTeamSize(teamSize)
-                    : tournamentFormat === "split_pairs"
-                      ? [SPLIT_PAIR_PLAYER_COUNT]
-                      : [16, 24, 32]
-                  ).map((count) => (
-                    <option key={count} value={count}>
-                      {count} Players
-                    </option>
-                  ))}
-                </select>
+                    }
+                    className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base"
+                  >
+                    {(tournamentFormat === "team_groups"
+                      ? playerCountsForTeamSize(teamSize)
+                      : [SPLIT_PAIR_PLAYER_COUNT]
+                    ).map((count) => (
+                      <option key={count} value={count}>
+                        {count} Players
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               {tournamentFormat === "team_groups" ? (
@@ -2285,6 +2249,15 @@ export default function HomePage() {
                 </select>
               </div>
             </div>
+
+            {tournamentFormat === "individual" && (
+              <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm leading-6 text-slate-300">
+                Pairings are fully random in every round until the
+                Final. After prelims, the Top 16 play best-of-3
+                quarterfinals, semifinals, and final. The Final
+                keeps the two semifinal winning pairs together.
+              </div>
+            )}
 
             {tournamentFormat === "team_groups" && (
               <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-300">
@@ -2861,7 +2834,7 @@ export default function HomePage() {
 
             <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">
               Round 1 will randomly pair all
-              players.
+              players using a hash of each name.
             </p>
 
             <button
@@ -2886,8 +2859,16 @@ export default function HomePage() {
                   </h2>
 
                   <p className="text-sm leading-6 text-slate-400">
-                    Enter the final score for
-                    each match. {scoreRuleHint(currentRound.round_type)}
+                    Enter the {usesBestOfThree(
+                      currentRound.round_type,
+                      tournament.format
+                    )
+                      ? "best-of-3 game scores"
+                      : "final score"}{" "}
+                    for each match. {scoreRuleHint(
+                      currentRound.round_type,
+                      tournament.format
+                    )}
                   </p>
                 </div>
 
@@ -2966,11 +2947,17 @@ export default function HomePage() {
                           ] || {
                             team1: "",
                             team2: "",
+                            games: emptyGameInputs(),
                           };
 
                         const completed =
                           match.status ===
                           "completed";
+
+                        const bestOfThree = usesBestOfThree(
+                          currentRound.round_type,
+                          tournament.format
+                        );
 
                         return (
                           <div
@@ -3029,6 +3016,7 @@ export default function HomePage() {
                                   )}
                                 </div>
 
+                                {!bestOfThree && (
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -3052,6 +3040,7 @@ export default function HomePage() {
                                   className="mt-4 h-14 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-center text-2xl font-bold outline-none focus:border-emerald-500 disabled:opacity-50"
                                   placeholder="0"
                                 />
+                                )}
                               </div>
 
                               <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-950 p-4">
@@ -3078,6 +3067,7 @@ export default function HomePage() {
                                   )}
                                 </div>
 
+                                {!bestOfThree && (
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -3101,8 +3091,38 @@ export default function HomePage() {
                                   className="mt-4 h-14 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-center text-2xl font-bold outline-none focus:border-blue-500 disabled:opacity-50"
                                   placeholder="0"
                                 />
+                                )}
                               </div>
                             </div>
+
+                            {bestOfThree && (
+                              <>
+                                <BestOfThreeScoreInputs
+                                  games={
+                                    score.games ||
+                                    emptyGameInputs()
+                                  }
+                                  disabled={completed}
+                                  onChange={(
+                                    gameIndex,
+                                    team,
+                                    value
+                                  ) =>
+                                    updateGameScore(
+                                      match.id,
+                                      gameIndex,
+                                      team,
+                                      value
+                                    )
+                                  }
+                                />
+                                {completed && (
+                                  <p className="mt-3 text-center text-sm font-semibold text-slate-300">
+                                    {formatMatchScoreLine(match)}
+                                  </p>
+                                )}
+                              </>
+                            )}
 
                             {!completed && (
                               <button

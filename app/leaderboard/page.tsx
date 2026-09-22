@@ -591,8 +591,9 @@ export default function LeaderboardPage() {
           ) : (
             <>
               <strong className="text-white">Qualification:</strong> Top 16
-              players after the preliminary rounds qualify for the
-              Quarterfinals.
+              players after the preliminary rounds qualify for
+              best-of-3 Quarterfinals. Pairing stays random until
+              the Final.
             </>
           )}
         </div>

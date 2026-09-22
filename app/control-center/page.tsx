@@ -9,6 +9,15 @@ import {
   scoreRuleHint,
   validateCompletedScore,
 } from "@/lib/scoreValidation";
+import BestOfThreeScoreInputs from "@/app/components/BestOfThreeScoreInputs";
+import {
+  emptyGameInputs,
+  formatMatchScoreLine,
+  gameInputsFromMatch,
+  resolveBestOfThree,
+  usesBestOfThree,
+  type GameScoreInput,
+} from "@/lib/bestOfThree";
 
 type Tournament = {
   id: string;
@@ -55,6 +64,7 @@ type Match = {
   winner_team: number | null;
   status: "scheduled" | "in_progress" | "completed";
   created_at?: string;
+  game_scores?: unknown;
 };
 
 type MatchPlayer = {
@@ -79,6 +89,7 @@ type Standing = {
 type ScoreInput = {
   team1: string;
   team2: string;
+  games: GameScoreInput[];
 };
 
 type MatchView = Match & {
@@ -331,6 +342,7 @@ export default function ControlCenterPage() {
             match.team2_score !== null
               ? String(match.team2_score)
               : "",
+          games: gameInputsFromMatch(match.game_scores),
         };
       });
 
@@ -521,10 +533,44 @@ export default function ControlCenterPage() {
         ...(current[matchId] || {
           team1: "",
           team2: "",
+          games: emptyGameInputs(),
         }),
         [team]: sanitized,
       },
     }));
+  };
+
+  const updateGameScoreInput = (
+    matchId: string,
+    gameIndex: number,
+    team: "team1" | "team2",
+    value: string
+  ) => {
+    setScoreInputs((current) => {
+      const existing = current[matchId] || {
+        team1: "",
+        team2: "",
+        games: emptyGameInputs(),
+      };
+      const games = [...(existing.games || emptyGameInputs())];
+
+      while (games.length < 3) {
+        games.push({ team1: "", team2: "" });
+      }
+
+      games[gameIndex] = {
+        ...games[gameIndex],
+        [team]: value,
+      };
+
+      return {
+        ...current,
+        [matchId]: {
+          ...existing,
+          games,
+        },
+      };
+    });
   };
 
   const saveMatchResult = async (match: MatchView) => {
@@ -539,24 +585,60 @@ export default function ControlCenterPage() {
         throw new Error("Enter both scores.");
       }
 
-      if (
-        score.team1 === "" ||
-        score.team2 === ""
-      ) {
-        throw new Error("Enter both scores.");
-      }
-
-      const team1Score = Number(score.team1);
-      const team2Score = Number(score.team2);
-
-      const scoreError = validateCompletedScore(
-        team1Score,
-        team2Score,
-        currentRound?.round_type
+      const bestOfThree = usesBestOfThree(
+        currentRound?.round_type,
+        tournament?.format
       );
 
-      if (scoreError) {
-        throw new Error(scoreError);
+      let team1Score: number;
+      let team2Score: number;
+      let winnerTeam: number;
+      let winnerPoints: number;
+      let loserPoints: number;
+      let team1Rally: number;
+      let team2Rally: number;
+      let gameScores: { team1: number; team2: number }[] | null = null;
+
+      if (bestOfThree) {
+        const result = resolveBestOfThree(score.games || emptyGameInputs());
+
+        if ("error" in result) {
+          throw new Error(result.error);
+        }
+
+        team1Score = result.team1Games;
+        team2Score = result.team2Games;
+        winnerTeam = result.winnerTeam;
+        team1Rally = result.team1Rally;
+        team2Rally = result.team2Rally;
+        winnerPoints =
+          (winnerTeam === 1 ? team1Rally : team2Rally) / 2;
+        loserPoints =
+          (winnerTeam === 1 ? team2Rally : team1Rally) / 2;
+        gameScores = result.games;
+      } else {
+        if (score.team1 === "" || score.team2 === "") {
+          throw new Error("Enter both scores.");
+        }
+
+        team1Score = Number(score.team1);
+        team2Score = Number(score.team2);
+
+        const scoreError = validateCompletedScore(
+          team1Score,
+          team2Score,
+          currentRound?.round_type
+        );
+
+        if (scoreError) {
+          throw new Error(scoreError);
+        }
+
+        winnerTeam = team1Score > team2Score ? 1 : 2;
+        team1Rally = team1Score;
+        team2Rally = team2Score;
+        winnerPoints = Math.max(team1Score, team2Score) / 2;
+        loserPoints = Math.min(team1Score, team2Score) / 2;
       }
 
       if (
@@ -567,32 +649,6 @@ export default function ControlCenterPage() {
           "Each match must have exactly two players per team."
         );
       }
-
-      const winnerTeam = team1Score > team2Score ? 1 : 2;
-
-      /*
-       * Your scoring rule:
-       *
-       * Winning player:
-       * winning score / 2
-       *
-       * Losing player:
-       * losing score / 2
-       *
-       * Example:
-       * 21 - 12
-       * Winners = 10.5 each
-       * Losers  = 6 each
-       */
-
-      const winningScore =
-        winnerTeam === 1 ? team1Score : team2Score;
-
-      const losingScore =
-        winnerTeam === 1 ? team2Score : team1Score;
-
-      const winnerPoints = winningScore / 2;
-      const loserPoints = losingScore / 2;
 
       /*
        * Protect against double scoring.
@@ -609,6 +665,7 @@ export default function ControlCenterPage() {
             team2_score: team2Score,
             winner_team: winnerTeam,
             status: "completed",
+            ...(gameScores ? { game_scores: gameScores } : {}),
           })
           .eq("id", match.id)
           .eq("status", "scheduled")
@@ -660,10 +717,10 @@ export default function ControlCenterPage() {
               (isWinner ? 0 : 1),
             points_for:
               Number(existingStanding.points_for || 0) +
-              team1Score / 2,
+              team1Rally / 2,
             points_against:
               Number(existingStanding.points_against || 0) +
-              team2Score / 2,
+              team2Rally / 2,
             tournament_points:
               Number(existingStanding.tournament_points || 0) +
               points,
@@ -706,10 +763,10 @@ export default function ControlCenterPage() {
               (isWinner ? 0 : 1),
             points_for:
               Number(existingStanding.points_for || 0) +
-              team2Score / 2,
+              team2Rally / 2,
             points_against:
               Number(existingStanding.points_against || 0) +
-              team1Score / 2,
+              team1Rally / 2,
             tournament_points:
               Number(existingStanding.tournament_points || 0) +
               points,
@@ -1052,7 +1109,10 @@ export default function ControlCenterPage() {
                 </p>
 
                 <p className="mt-2 text-xs text-slate-500">
-                  {scoreRuleHint(currentRound.round_type)}
+                  {scoreRuleHint(
+                    currentRound.round_type,
+                    tournament.format
+                  )}
                 </p>
               </div>
 
@@ -1124,6 +1184,7 @@ export default function ControlCenterPage() {
                           scoreInputs[match.id] || {
                             team1: "",
                             team2: "",
+                            games: emptyGameInputs(),
                           };
 
                         const completed =
@@ -1135,6 +1196,11 @@ export default function ControlCenterPage() {
 
                         const team2Winner =
                           match.winner_team === 2;
+
+                        const bestOfThree = usesBestOfThree(
+                          currentRound.round_type,
+                          tournament.format
+                        );
 
                         return (
                           <div
@@ -1185,6 +1251,7 @@ export default function ControlCenterPage() {
                                   </div>
                                 </div>
 
+                                {!bestOfThree && (
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -1201,6 +1268,7 @@ export default function ControlCenterPage() {
                                   className="w-16 rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-center text-xl font-black outline-none focus:border-emerald-500 disabled:opacity-60"
                                   placeholder="0"
                                 />
+                                )}
                               </div>
                             </div>
 
@@ -1232,6 +1300,7 @@ export default function ControlCenterPage() {
                                   </div>
                                 </div>
 
+                                {!bestOfThree && (
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -1248,8 +1317,26 @@ export default function ControlCenterPage() {
                                   className="w-16 rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-center text-xl font-black outline-none focus:border-emerald-500 disabled:opacity-60"
                                   placeholder="0"
                                 />
+                                )}
                               </div>
                             </div>
+
+                            {bestOfThree && (
+                              <BestOfThreeScoreInputs
+                                games={
+                                  score.games || emptyGameInputs()
+                                }
+                                disabled={completed}
+                                onChange={(gameIndex, team, value) =>
+                                  updateGameScoreInput(
+                                    match.id,
+                                    gameIndex,
+                                    team,
+                                    value
+                                  )
+                                }
+                              />
+                            )}
 
                             {!completed && (
                               <button
@@ -1269,8 +1356,7 @@ export default function ControlCenterPage() {
 
                             {completed && (
                               <div className="mt-4 text-center text-xs text-slate-500">
-                                {match.team1_score} -{" "}
-                                {match.team2_score}
+                                {formatMatchScoreLine(match)}
                                 {match.winner_team && (
                                   <span className="ml-2 text-emerald-400">
                                     • Team{" "}

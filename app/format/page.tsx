@@ -11,7 +11,7 @@ const individualSteps: DiagramStep[] = [
     nodes: [
       {
         title: "Preliminary rounds",
-        detail: "Everyone plays · random, then smart pairing",
+        detail: "Everyone plays · full random pairing",
       },
     ],
   },
@@ -19,17 +19,17 @@ const individualSteps: DiagramStep[] = [
     nodes: [
       {
         title: "Quarterfinals",
-        detail: "Top 16 qualify · 4 doubles matches",
+        detail: "Top 16 qualify · 4 best-of-3 matches",
       },
     ],
   },
   {
     nodes: [
-      { title: "Semifinals", detail: "8 winners · 2 doubles matches" },
+      { title: "Semifinals", detail: "8 winners · 2 best-of-3 matches" },
     ],
   },
   {
-    nodes: [{ title: "Final", detail: "4 winners · 1 doubles match" }],
+    nodes: [{ title: "Final", detail: "SF pairs stay · 1 best-of-3 match" }],
   },
   {
     nodes: [{ title: "Champions", detail: "The winning pair" }],
@@ -263,9 +263,9 @@ export default function TournamentFormatPage() {
               <p className="mt-3 text-sm leading-6 text-slate-300">
                 Mixed pairings. Players earn rally points. Top 16
                 go to knockout. Every match is doubles: two
-                players versus two players. Player count must be
-                divisible by 4, so the usual sizes are 16, 24, or
-                32 players.
+                players versus two players. Enter any player count
+                from 16 to 64 that is divisible by 4, such as 16,
+                20, 24, or 32.
               </p>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -308,10 +308,9 @@ export default function TournamentFormatPage() {
                     1. Preliminary rounds
                   </strong>
                   <div className="mt-1">
-                    Everyone plays. Round 1 is random. Later
-                    preliminary rounds use intelligent pairing
-                    to avoid repeat partners and opponents, and
-                    to keep team strength close.
+                    Everyone plays. Every prelim round uses full
+                    random pairing, with no ranking bias and no
+                    attempt to avoid repeat partners.
                   </div>
                 </li>
                 <li>
@@ -320,7 +319,8 @@ export default function TournamentFormatPage() {
                   </strong>
                   <div className="mt-1">
                     The Top 16 players qualify. They are paired
-                    randomly into 4 doubles matches.
+                    at random into 4 doubles matches. Each match
+                    is best of 3 games.
                   </div>
                 </li>
                 <li>
@@ -328,18 +328,64 @@ export default function TournamentFormatPage() {
                     3. Semifinals
                   </strong>
                   <div className="mt-1">
-                    The 8 quarterfinal winners are paired
-                    randomly into 2 doubles matches.
+                    The 8 quarterfinal winners are paired at
+                    random into 2 doubles matches. Each match is
+                    best of 3 games.
                   </div>
                 </li>
                 <li>
                   <strong className="text-white">4. Final</strong>
                   <div className="mt-1">
-                    The 4 semifinal winners play one doubles
-                    match for the title.
+                    The two semifinal winning pairs stay together
+                    and play one best-of-3 doubles match for the
+                    title. Pairing is not shuffled again.
                   </div>
                 </li>
               </ol>
+            </section>
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+              <h2 className="text-xl font-black">
+                Full random pairing
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">
+                Individual doubles uses full random pairing. Every
+                draw until the Final is built the same way: a
+                cryptographic hash of each player, then a sort.
+              </p>
+              <ol className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
+                <li>
+                  <strong className="text-white">1. Fresh salt.</strong>{" "}
+                  The app creates a 16-byte random value so the same
+                  names do not produce the same draw twice.
+                </li>
+                <li>
+                  <strong className="text-white">2. Hash each player.</strong>{" "}
+                  For every player it computes SHA-256 of{" "}
+                  <code className="rounded bg-slate-950 px-1.5 py-0.5 text-emerald-300">
+                    salt:playerId:playerName
+                  </code>
+                  . SHA-256 mixes the id and name evenly, so the
+                  original list order cannot leak into the draw.
+                </li>
+                <li>
+                  <strong className="text-white">3. Sort by hash.</strong>{" "}
+                  Players are ordered by that hex digest. If two
+                  hashes ever matched, player id is the tie-break.
+                </li>
+                <li>
+                  <strong className="text-white">4. Group into matches.</strong>{" "}
+                  Consecutive groups of four become a match:
+                  positions 1-2 versus 3-4, then 5-6 versus 7-8,
+                  and so on.
+                </li>
+              </ol>
+              <p className="mt-4 text-sm leading-6 text-slate-400">
+                That hash shuffle is used for every preliminary
+                round, the quarterfinals, and the semifinals. The
+                Final does not re-hash: the two semifinal winning
+                pairs stay together.
+              </p>
             </section>
 
             <MatchCounts
@@ -350,7 +396,7 @@ export default function TournamentFormatPage() {
                 { label: "Final", count: 1 },
               ]}
               total={individualTotal(24, 6)}
-              note="Usual setup is 24 players and 6 prelims: 43 matches. Knockout is always 7. Each prelim round is players ÷ 4 matches, so 16 players is 4 a round and 32 players is 8 a round."
+              note="Usual setup is 24 players and 6 prelims: 43 matches. Knockout is always 7 matches, and from the quarterfinals each of those is best of 3 games. Each prelim round is players ÷ 4 matches, so 20 players is 5 a round and 32 players is 8 a round."
             />
 
             <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
@@ -373,7 +419,7 @@ export default function TournamentFormatPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[16, 24, 32].map((players) => (
+                    {[16, 20, 24, 28, 32].map((players) => (
                       <tr
                         key={players}
                         className="border-t border-slate-800"
@@ -421,9 +467,12 @@ export default function TournamentFormatPage() {
                     QF / SF / Final
                   </div>
                   <p className="mt-2 text-slate-300">
-                    First to 21, must win by 2. After 20-20,
-                    play continues to 22-20, 23-21, and so on,
-                    until 29-29. Then 30 is golden point.
+                    Best of 3 games. First pair to two games
+                    wins. Each game is first to 21, must win by
+                    2. After 20-20, play continues to 22-20,
+                    23-21, and so on, until 29-29. Then 30 is
+                    golden point. Game 3 is played only if the
+                    first two games are split.
                   </p>
                 </div>
               </div>

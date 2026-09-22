@@ -10,7 +10,7 @@ import {
   getDoublesFinalResult,
   getSplitPairFinalResults,
 } from "@/lib/finalResult";
-import { rankTeams } from "@/lib/teamTournament";
+import { formatMatchScoreLine } from "@/lib/bestOfThree";
 import {
   poolLabel,
   rankFixedPairs,
@@ -63,6 +63,7 @@ type Match = {
   winner_team: number | null;
   fixed_pair1_id?: string | null;
   fixed_pair2_id?: string | null;
+  game_scores?: unknown;
 };
 
 type MatchPlayer = {
@@ -1248,11 +1249,7 @@ export default function HistoricalTournamentPage() {
 
                             <div className="text-center">
                               <div className="text-xl font-black">
-                                {match.team1_score ?? "-"}{" "}
-                                <span className="text-slate-600">
-                                  -
-                                </span>{" "}
-                                {match.team2_score ?? "-"}
+                                {formatMatchScoreLine(match)}
                               </div>
 
                               <div className="mt-1 text-[10px] text-slate-500">
