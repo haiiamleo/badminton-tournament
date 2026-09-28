@@ -62,7 +62,7 @@ const navItems: Record<
   },
   new: {
     label: "➕ New Tournament",
-    href: "/?create=1",
+    href: "/?create=1#create-tournament",
     className: accentClass,
     clearActive: true,
   },

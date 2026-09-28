@@ -4,11 +4,51 @@ export function formatDoublesTeam(
   return players.map((player) => player.name).join(" + ");
 }
 
+export function championshipMatch<T extends { match_number: number }>(
+  matches: T[]
+) {
+  if (matches.length === 0) {
+    return undefined;
+  }
+
+  if (matches.length === 1) {
+    return matches[0];
+  }
+
+  return (
+    matches.find((match) => match.match_number === 2) ??
+    [...matches].sort((a, b) => b.match_number - a.match_number)[0]
+  );
+}
+
+export function thirdPlaceMatch<T extends { match_number: number }>(
+  matches: T[]
+) {
+  if (matches.length < 2) {
+    return undefined;
+  }
+
+  return matches.find((match) => match.match_number === 1);
+}
+
+export function finalsScheduleLabel(
+  roundType: string | null | undefined,
+  matchNumber: number,
+  matchesInRound: number
+) {
+  if (roundType === "final" && matchesInRound > 1) {
+    return matchNumber === 1 ? "3rd Place" : "Final";
+  }
+
+  return `Match ${matchNumber}`;
+}
+
 export function getDoublesFinalResult<TPlayer>(
   rounds: { id: string; round_type: string }[],
   matches: {
     id: string;
     round_id: string;
+    match_number: number;
     winner_team: number | null;
     team1_score: number | null;
     team2_score: number | null;
@@ -28,10 +68,8 @@ export function getDoublesFinalResult<TPlayer>(
     return null;
   }
 
-  const finalMatch = matches.find(
-    (match) =>
-      match.round_id === finalRound.id &&
-      (match.winner_team === 1 || match.winner_team === 2)
+  const finalMatch = championshipMatch(
+    matches.filter((match) => match.round_id === finalRound.id)
   );
 
   if (!finalMatch || !finalMatch.winner_team) {

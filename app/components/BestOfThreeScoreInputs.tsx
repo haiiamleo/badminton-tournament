@@ -19,8 +19,10 @@ export default function BestOfThreeScoreInputs({
   disabled = false,
   onChange,
 }: Props) {
-  const tally = tallyCompletedGames(games);
-  const showGame3 = tally.team1Games === 1 && tally.team2Games === 1;
+  const openingGames = tallyCompletedGames(games.slice(0, 2));
+  const showGame3 =
+    openingGames.team1Games === 1 && openingGames.team2Games === 1;
+  const tally = tallyCompletedGames(showGame3 ? games : games.slice(0, 2));
   const gameCount = showGame3 ? 3 : 2;
 
   return (

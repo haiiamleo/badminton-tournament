@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import AppNav from "@/app/components/AppNav";
 import { describeError } from "@/lib/errorMessage";
+import { scrollToSection } from "@/lib/scrollToSection";
 import { rankTeams } from "@/lib/teamTournament";
 import {
   poolLabel,
@@ -361,7 +362,10 @@ export default function LeaderboardPage() {
             ).map(([view, label]) => (
               <button
                 key={view}
-                onClick={() => setSplitView(view)}
+                onClick={() => {
+                  setSplitView(view);
+                  scrollToSection("leaderboard-results");
+                }}
                 className={`min-h-11 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
                   splitView === view
                     ? "bg-emerald-600 text-white"
@@ -374,6 +378,7 @@ export default function LeaderboardPage() {
           </div>
         )}
 
+        <div id="leaderboard-results" className="scroll-mt-4">
         {loading ? (
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-400">
             Loading leaderboard...
@@ -573,6 +578,7 @@ export default function LeaderboardPage() {
             )}
           </div>
         )}
+        </div>
 
         <div className="mt-6 rounded-lg border border-slate-800 bg-slate-900 p-4 text-sm text-slate-400">
           {format === "team_groups" ? (
@@ -592,8 +598,9 @@ export default function LeaderboardPage() {
             <>
               <strong className="text-white">Qualification:</strong> Top 16
               players after the preliminary rounds qualify for
-              best-of-3 Quarterfinals. Pairing stays random until
-              the Final.
+              best-of-3 Quarterfinals. With 12 players, the Top 8 go
+              straight to best-of-3 Semifinals. Pairing stays random
+              until the Final. Semifinal losers play for 3rd place.
             </>
           )}
         </div>

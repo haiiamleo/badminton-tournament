@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import AppNav from "@/app/components/AppNav";
+import { scrollToSection } from "@/lib/scrollToSection";
 import FormatDiagram, {
   type DiagramStep,
 } from "@/app/components/FormatDiagram";
@@ -29,7 +30,10 @@ const individualSteps: DiagramStep[] = [
     ],
   },
   {
-    nodes: [{ title: "Final", detail: "SF pairs stay · 1 best-of-3 match" }],
+    nodes: [
+      { title: "3rd place", detail: "Semifinal losers stay together" },
+      { title: "Final", detail: "Semifinal winners stay together" },
+    ],
   },
   {
     nodes: [{ title: "Champions", detail: "The winning pair" }],
@@ -117,7 +121,9 @@ const teamSteps: DiagramStep[] = [
 ];
 
 function individualTotal(players: number, prelimRounds: number) {
-  return (players / 4) * prelimRounds + 7;
+  const knockoutMatches = players >= 16 ? 8 : 4;
+
+  return (players / 4) * prelimRounds + knockoutMatches;
 }
 
 function teamMatchTotal(playerCount: number, teamSize: number) {
@@ -175,6 +181,13 @@ export default function TournamentFormatPage() {
     "individual" | "split_pairs" | "team"
   >("individual");
 
+  const selectFormat = (
+    next: "individual" | "split_pairs" | "team"
+  ) => {
+    setTab(next);
+    scrollToSection("format-details");
+  };
+
   const goHome = () => {
     window.location.href = "/";
   };
@@ -208,7 +221,7 @@ export default function TournamentFormatPage() {
             type="button"
             role="tab"
             aria-selected={tab === "individual"}
-            onClick={() => setTab("individual")}
+            onClick={() => selectFormat("individual")}
             className={`rounded-xl px-4 py-3 text-sm font-black transition duration-300 ${
               tab === "individual"
                 ? "bg-emerald-600 text-white"
@@ -222,7 +235,7 @@ export default function TournamentFormatPage() {
             type="button"
             role="tab"
             aria-selected={tab === "split_pairs"}
-            onClick={() => setTab("split_pairs")}
+            onClick={() => selectFormat("split_pairs")}
             className={`rounded-xl px-4 py-3 text-sm font-black transition duration-300 ${
               tab === "split_pairs"
                 ? "bg-emerald-600 text-white"
@@ -236,7 +249,7 @@ export default function TournamentFormatPage() {
             type="button"
             role="tab"
             aria-selected={tab === "team"}
-            onClick={() => setTab("team")}
+            onClick={() => selectFormat("team")}
             className={`rounded-xl px-4 py-3 text-sm font-black transition duration-300 ${
               tab === "team"
                 ? "bg-emerald-600 text-white"
@@ -247,7 +260,10 @@ export default function TournamentFormatPage() {
           </button>
         </div>
 
-        <div className="relative overflow-hidden">
+        <div
+          id="format-details"
+          className="relative scroll-mt-4 overflow-hidden"
+        >
           <div
             role="tabpanel"
             className={`space-y-6 transition-all duration-300 ease-out ${
@@ -261,11 +277,13 @@ export default function TournamentFormatPage() {
                 Individual doubles
               </h2>
               <p className="mt-3 text-sm leading-6 text-slate-300">
-                Mixed pairings. Players earn rally points. Top 16
-                go to knockout. Every match is doubles: two
-                players versus two players. Enter any player count
-                from 16 to 64 that is divisible by 4, such as 16,
-                20, 24, or 32.
+                Mixed pairings. Players earn rally points. Every
+                match is doubles: two players versus two players.
+                Enter any player count from 12 to 64 that is
+                divisible by 4, such as 12, 16, 20, 24, or 32.
+                With 16 or more players, the Top 16 go to the
+                quarterfinals. With 12 players, the Top 8 go
+                straight to the semifinals.
               </p>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -298,7 +316,7 @@ export default function TournamentFormatPage() {
               </p>
               <div className="mt-4">
                 <FormatDiagram
-                  label="Individual doubles stages: preliminary rounds, quarterfinals, semifinals, final, champions."
+                  label="Individual doubles stages: preliminary rounds, quarterfinals, semifinals, 3rd place and final, champions."
                   steps={individualSteps}
                 />
               </div>
@@ -308,8 +326,9 @@ export default function TournamentFormatPage() {
                     1. Preliminary rounds
                   </strong>
                   <div className="mt-1">
-                    Everyone plays. Every prelim round uses full
-                    random pairing, with no ranking bias and no
+                    Everyone plays. Type the number of preliminary
+                    rounds, from 1 to 12. Every prelim round uses
+                    full random pairing, with no ranking bias and no
                     attempt to avoid repeat partners.
                   </div>
                 </li>
@@ -320,7 +339,8 @@ export default function TournamentFormatPage() {
                   <div className="mt-1">
                     The Top 16 players qualify. They are paired
                     at random into 4 doubles matches. Each match
-                    is best of 3 games.
+                    is best of 3 games. A 12-player event skips
+                    this stage.
                   </div>
                 </li>
                 <li>
@@ -330,15 +350,18 @@ export default function TournamentFormatPage() {
                   <div className="mt-1">
                     The 8 quarterfinal winners are paired at
                     random into 2 doubles matches. Each match is
-                    best of 3 games.
+                    best of 3 games. In a 12-player event, the
+                    Top 8 from the prelims play here instead.
                   </div>
                 </li>
                 <li>
-                  <strong className="text-white">4. Final</strong>
+                  <strong className="text-white">4. Final and 3rd place</strong>
                   <div className="mt-1">
-                    The two semifinal winning pairs stay together
-                    and play one best-of-3 doubles match for the
-                    title. Pairing is not shuffled again.
+                    Both matches are scheduled together. The two
+                    semifinal winning pairs stay together for the
+                    final. The two semifinal losing pairs stay
+                    together and play for 3rd place. Pairing is
+                    not shuffled again. Each match is best of 3.
                   </div>
                 </li>
               </ol>
@@ -383,8 +406,8 @@ export default function TournamentFormatPage() {
               <p className="mt-4 text-sm leading-6 text-slate-400">
                 That hash shuffle is used for every preliminary
                 round, the quarterfinals, and the semifinals. The
-                Final does not re-hash: the two semifinal winning
-                pairs stay together.
+                final and 3rd place do not re-hash: each semifinal
+                pair stays together.
               </p>
             </section>
 
@@ -393,17 +416,19 @@ export default function TournamentFormatPage() {
                 { label: "6 preliminary rounds (6 per round)", count: 36 },
                 { label: "Quarterfinals", count: 4 },
                 { label: "Semifinals", count: 2 },
+                { label: "3rd place", count: 1 },
                 { label: "Final", count: 1 },
               ]}
               total={individualTotal(24, 6)}
-              note="Usual setup is 24 players and 6 prelims: 43 matches. Knockout is always 7 matches, and from the quarterfinals each of those is best of 3 games. Each prelim round is players ÷ 4 matches, so 20 players is 5 a round and 32 players is 8 a round."
+              note="Usual setup is 24 players and 6 prelims: 44 matches. With 16 or more players, the knockout is 8 matches. With 12 players, it is 4 matches: 2 semifinals, 3rd place, and the final. Every knockout match is best of 3 games. Each prelim round is players ÷ 4 matches, so 12 players is 3 a round and 32 players is 8 a round."
             />
 
             <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
               <div className="px-6 pt-6">
                 <h3 className="text-lg font-black">Other sizes</h3>
                 <p className="mt-1 text-sm text-slate-400">
-                  Total matches for 4 to 8 prelim rounds.
+                  Examples for 4 to 8 prelim rounds. The setup form
+                  accepts any whole number from 1 to 12.
                 </p>
               </div>
               <div className="mt-4 overflow-x-auto">
@@ -419,7 +444,7 @@ export default function TournamentFormatPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[16, 20, 24, 28, 32].map((players) => (
+                    {[12, 16, 20, 24, 28, 32].map((players) => (
                       <tr
                         key={players}
                         className="border-t border-slate-800"
@@ -449,8 +474,9 @@ export default function TournamentFormatPage() {
             <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
               <h2 className="text-xl font-black">Scoring</h2>
               <p className="mt-3 text-sm leading-6 text-slate-300">
-                Each player earns half of their team&apos;s
-                rally score as tournament points.
+                In the prelims, both players on a team earn that
+                team&apos;s full rally score. The score is not
+                split in half.
               </p>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
@@ -459,7 +485,8 @@ export default function TournamentFormatPage() {
                   </div>
                   <p className="mt-2 text-slate-300">
                     Played to 21. At 20-20, the next point is
-                    golden, so the game ends 21-20.
+                    golden, so the game ends 21-20. Both players
+                    on a team receive the full team score.
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
@@ -478,17 +505,15 @@ export default function TournamentFormatPage() {
               </div>
               <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
                 <div className="font-bold text-emerald-400">
-                  Example: 21 - 12
+                  Prelim example: 21 - 14
                 </div>
                 <p className="mt-2 text-slate-300">
-                  Winning pair: 21 / 2 ={" "}
-                  <strong className="text-white">10.5</strong>{" "}
-                  points each
+                  Winning team: both players get{" "}
+                  <strong className="text-white">21</strong>
                 </p>
                 <p className="mt-1 text-slate-300">
-                  Losing pair: 12 / 2 ={" "}
-                  <strong className="text-white">6</strong>{" "}
-                  points each
+                  Losing team: both players get{" "}
+                  <strong className="text-white">14</strong>
                 </p>
               </div>
               <p className="mt-4 text-sm leading-6 text-slate-300">
@@ -787,8 +812,8 @@ export default function TournamentFormatPage() {
               </h2>
               <p className="mt-3 text-sm leading-6 text-slate-300">
                 All 20 players receive completely random partners and
-                opponents for five rounds. Each player receives half
-                of their team&apos;s rally score. Player rankings use
+                opponents for five rounds. Both players on a team
+                receive that team&apos;s full rally score. Player rankings use
                 tournament points, then wins, point difference, and
                 points scored.
               </p>

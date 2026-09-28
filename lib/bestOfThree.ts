@@ -98,7 +98,7 @@ export function tallyCompletedGames(games: GameScoreInput[]) {
       break;
     }
 
-    if (team1 === team2) {
+    if (validateCompletedScore(team1, team2, "quarterfinal")) {
       break;
     }
 
@@ -204,8 +204,18 @@ export function formatMatchScoreLine(match: {
   return `${headline} (${detail})`;
 }
 
-export const INDIVIDUAL_MIN_PLAYERS = 16;
+export const INDIVIDUAL_MIN_PLAYERS = 12;
 export const INDIVIDUAL_MAX_PLAYERS = 64;
+export const INDIVIDUAL_MIN_PRELIM_ROUNDS = 1;
+export const INDIVIDUAL_MAX_PRELIM_ROUNDS = 12;
+
+/*
+ * 16+ players: Top 16 play quarterfinals.
+ * Fewer than 16: Top 8 go straight to semifinals.
+ */
+export function individualQualificationCount(playerCount: number) {
+  return playerCount >= 16 ? 16 : 8;
+}
 
 export function isValidIndividualPlayerCount(count: number) {
   return (
@@ -213,5 +223,13 @@ export function isValidIndividualPlayerCount(count: number) {
     count >= INDIVIDUAL_MIN_PLAYERS &&
     count <= INDIVIDUAL_MAX_PLAYERS &&
     count % 4 === 0
+  );
+}
+
+export function isValidIndividualPrelimRounds(count: number) {
+  return (
+    Number.isInteger(count) &&
+    count >= INDIVIDUAL_MIN_PRELIM_ROUNDS &&
+    count <= INDIVIDUAL_MAX_PRELIM_ROUNDS
   );
 }

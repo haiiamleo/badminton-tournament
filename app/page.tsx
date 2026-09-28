@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import AppNav from "@/app/components/AppNav";
 import {
@@ -9,7 +9,12 @@ import {
 } from "../lib/tournamentEngine";
 import { deleteTournament } from "../lib/deleteTournament";
 import { describeError } from "../lib/errorMessage";
-import { formatDoublesTeam } from "../lib/finalResult";
+import {
+  championshipMatch,
+  finalsScheduleLabel,
+  formatDoublesTeam,
+  thirdPlaceMatch,
+} from "../lib/finalResult";
 import {
   sanitizeScoreInput,
   scoreRuleHint,
@@ -20,9 +25,13 @@ import {
   emptyGameInputs,
   formatMatchScoreLine,
   gameInputsFromMatch,
+  individualQualificationCount,
   isValidIndividualPlayerCount,
+  isValidIndividualPrelimRounds,
   INDIVIDUAL_MAX_PLAYERS,
+  INDIVIDUAL_MAX_PRELIM_ROUNDS,
   INDIVIDUAL_MIN_PLAYERS,
+  INDIVIDUAL_MIN_PRELIM_ROUNDS,
   resolveBestOfThree,
   usesBestOfThree,
   type GameScoreInput,
@@ -40,6 +49,12 @@ import {
   SPLIT_PAIR_PLAYER_COUNT,
   SPLIT_PAIR_PRELIM_ROUNDS,
 } from "../lib/splitPairsTournament";
+import { scrollToSection } from "../lib/scrollToSection";
+import CompletedMatches from "@/app/components/CompletedMatches";
+import {
+  loadCompletedMatches,
+  type CompletedMatchView,
+} from "../lib/individualMatchEdit";
 
 type Player = {
   id: string;
@@ -117,6 +132,9 @@ export default function HomePage() {
   const [matches, setMatches] =
     useState<Match[]>([]);
 
+  const [completedMatches, setCompletedMatches] =
+    useState<CompletedMatchView[]>([]);
+
   const [matchPlayers, setMatchPlayers] =
     useState<MatchPlayer[]>([]);
 
@@ -130,7 +148,7 @@ export default function HomePage() {
     useState(24);
 
   const [preliminaryRounds, setPreliminaryRounds] =
-    useState(6);
+    useState(0);
 
   const [courts, setCourts] =
     useState(3);
@@ -170,6 +188,9 @@ export default function HomePage() {
   const [showCreateForm, setShowCreateForm] =
     useState(false);
 
+  const scrollCreateForm = useRef(false);
+  const scrolledToNextRound = useRef(false);
+
   /*
    * Restore the active tournament after browser refresh.
    */
@@ -182,13 +203,47 @@ export default function HomePage() {
     }
 
     const params = new URLSearchParams(window.location.search);
+    const wantsCreateForm =
+      params.get("create") === "1" ||
+      window.location.hash === "#create-tournament";
 
-    if (params.get("create") === "1") {
+    if (!activeTournamentId && wantsCreateForm) {
+      scrollCreateForm.current = true;
       // Initialize the form from the URL once on mount.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowCreateForm(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (
+      !showCreateForm ||
+      tournament ||
+      !scrollCreateForm.current
+    ) {
+      return;
+    }
+
+    scrollCreateForm.current = false;
+    scrollToSection("create-tournament");
+  }, [showCreateForm, tournament]);
+
+  useEffect(() => {
+    if (scrolledToNextRound.current) {
+      return;
+    }
+
+    if (window.location.hash !== "#next-round") {
+      return;
+    }
+
+    if (!document.getElementById("next-round")) {
+      return;
+    }
+
+    scrolledToNextRound.current = true;
+    scrollToSection("next-round");
+  }, [tournament, currentRound, matches]);
 
   useEffect(() => {
     // Keep the controlled input list aligned with the selected size.
@@ -240,10 +295,22 @@ export default function HomePage() {
           .from("tournaments")
           .select("*")
           .eq("id", tournamentId)
-          .single();
+          .maybeSingle();
 
       if (tournamentError) {
         throw tournamentError;
+      }
+
+      if (!tournamentData) {
+        localStorage.removeItem("activeTournamentId");
+        setTournament(null);
+        setPlayers([]);
+        setStandings([]);
+        setCurrentRound(null);
+        setMatches([]);
+        setCompletedMatches([]);
+        setMatchPlayers([]);
+        return;
       }
 
       setTournament(tournamentData);
@@ -266,8 +333,20 @@ export default function HomePage() {
         setStandings([]);
         setCurrentRound(null);
         setMatches([]);
+        setCompletedMatches([]);
         setMatchPlayers([]);
         return;
+      }
+
+      if (
+        !tournamentData.format ||
+        tournamentData.format === "individual"
+      ) {
+        setCompletedMatches(
+          await loadCompletedMatches(tournamentId)
+        );
+      } else {
+        setCompletedMatches([]);
       }
 
       const { data: standingData, error: standingError } =
@@ -433,6 +512,16 @@ export default function HomePage() {
       }
 
       if (
+        tournamentFormat === "individual" &&
+        !isValidIndividualPrelimRounds(preliminaryRounds)
+      ) {
+        setStatus(
+          `Enter a preliminary round count from ${INDIVIDUAL_MIN_PRELIM_ROUNDS} to ${INDIVIDUAL_MAX_PRELIM_ROUNDS}.`
+        );
+        return;
+      }
+
+      if (
         tournamentFormat === "split_pairs" &&
         playerCount !== SPLIT_PAIR_PLAYER_COUNT
       ) {
@@ -475,7 +564,7 @@ export default function HomePage() {
                 ? 4
                 : tournamentFormat === "split_pairs"
                   ? 8
-                  : 16,
+                  : individualQualificationCount(playerCount),
             status: "setup",
             format: tournamentFormat,
             team_size:
@@ -909,8 +998,20 @@ export default function HomePage() {
 
     return sortedPlayers.slice(
       0,
-      tournament?.qualification_count ||
-        16
+      knockoutQualifierCount()
+    );
+  }
+
+  function knockoutQualifierCount() {
+    if (
+      tournament?.format === "split_pairs" ||
+      tournament?.format === "team_groups"
+    ) {
+      return tournament.qualification_count || 8;
+    }
+
+    return individualQualificationCount(
+      tournament?.total_players || 16
     );
   }
 
@@ -1073,17 +1174,22 @@ export default function HomePage() {
           return;
         }
 
-        const top16 = getTop16();
+        const qualifierCount = knockoutQualifierCount();
+        const qualifiers = getTop16();
+        const nextStage =
+          qualifierCount === 8 ? "semifinal" : "quarterfinal";
+        const stageLabel =
+          nextStage === "semifinal" ? "Semifinals" : "Quarterfinals";
 
-        if (top16.length < 16) {
+        if (qualifiers.length < qualifierCount) {
           throw new Error(
-            "At least 16 qualified players are required for the Quarterfinals."
+            `At least ${qualifierCount} qualified players are required for the ${stageLabel}.`
           );
         }
 
         const pairings =
           await generateRandomPairings(
-            top16.map((player) => ({
+            qualifiers.map((player) => ({
               id: player.id,
               name: player.name,
             }))
@@ -1091,12 +1197,12 @@ export default function HomePage() {
 
         await createRound(
           currentRound.round_number + 1,
-          "quarterfinal",
+          nextStage,
           pairings
         );
 
         setStatus(
-          "Quarterfinals generated from the Top 16."
+          `${stageLabel} generated from the Top ${qualifierCount}.`
         );
 
         return;
@@ -1183,32 +1289,46 @@ export default function HomePage() {
         "semifinal"
       ) {
         const winningTeams: string[][] = [];
+        const losingTeams: string[][] = [];
 
         for (const match of matches) {
           if (!match.winner_team) {
             continue;
           }
 
-          const teamPlayers = matchPlayers
-            .filter(
-              (player) =>
-                player.match_id === match.id &&
-                player.team_number === match.winner_team
-            )
-            .map((player) => player.player_id);
+          const loserTeam = match.winner_team === 1 ? 2 : 1;
+          const playersForTeam = (teamNumber: number) =>
+            matchPlayers
+              .filter(
+                (player) =>
+                  player.match_id === match.id &&
+                  player.team_number === teamNumber
+              )
+              .map((player) => player.player_id);
 
-          if (teamPlayers.length === 2) {
-            winningTeams.push(teamPlayers);
+          const winners = playersForTeam(match.winner_team);
+          const losers = playersForTeam(loserTeam);
+
+          if (winners.length === 2) {
+            winningTeams.push(winners);
+          }
+
+          if (losers.length === 2) {
+            losingTeams.push(losers);
           }
         }
 
-        if (winningTeams.length !== 2) {
+        if (winningTeams.length !== 2 || losingTeams.length !== 2) {
           throw new Error(
             "Both Semifinal matches must be completed before generating the Final."
           );
         }
 
         const pairings: Pairing[] = [
+          {
+            team1: losingTeams[0],
+            team2: losingTeams[1],
+          },
           {
             team1: winningTeams[0],
             team2: winningTeams[1],
@@ -1222,7 +1342,7 @@ export default function HomePage() {
         );
 
         setStatus(
-          "Final generated from the Semifinal winning pairs."
+          "Final and 3rd place generated. Semifinal pairs stay together."
         );
 
         return;
@@ -1378,8 +1498,17 @@ export default function HomePage() {
         }
 
         winnerTeam = team1Score > team2Score ? 1 : 2;
-        winnerPoints = Math.max(team1Score, team2Score) / 2;
-        loserPoints = Math.min(team1Score, team2Score) / 2;
+        const winningScore = Math.max(team1Score, team2Score);
+        const losingScore = Math.min(team1Score, team2Score);
+        const fullPrelimScore =
+          currentRound?.round_type === "preliminary";
+
+        winnerPoints = fullPrelimScore
+          ? winningScore
+          : winningScore / 2;
+        loserPoints = fullPrelimScore
+          ? losingScore
+          : losingScore / 2;
       }
 
       if (match.status === "completed") {
@@ -1719,7 +1848,7 @@ export default function HomePage() {
         return "Semifinals";
 
       case "final":
-        return "Final";
+        return matches.length > 1 ? "Final & 3rd Place" : "Final";
 
       default:
         return `Round ${round.round_number}`;
@@ -1780,7 +1909,7 @@ export default function HomePage() {
       return grouped;
     }, [matches]);
 
-  const completedMatches =
+  const completedInRound =
     matches.filter(
       (match) =>
         match.status ===
@@ -1791,18 +1920,15 @@ export default function HomePage() {
     matches.length === 0
       ? 0
       : Math.round(
-          (completedMatches /
+          (completedInRound /
             matches.length) *
             100
         );
 
   const top16 =
     tournament?.format !== "split_pairs" &&
-    currentRound &&
-    currentRound.round_type ===
-      "preliminary" &&
-    currentRound.round_number ===
-      tournament?.preliminary_rounds
+    currentRound?.round_type === "final" &&
+    currentRound.status === "completed"
       ? getTop16()
       : [];
 
@@ -1846,7 +1972,9 @@ export default function HomePage() {
         return "Create Fixed Pairs";
       }
 
-      return "Generate Quarterfinals — Top 16";
+      return knockoutQualifierCount() === 8
+        ? "Generate Semifinals — Top 8"
+        : "Generate Quarterfinals — Top 16";
     }
 
     if (
@@ -1860,10 +1988,20 @@ export default function HomePage() {
       currentRound.round_type ===
       "semifinal"
     ) {
-      return "Generate Final";
+      return "Generate Final & 3rd Place";
     }
 
     return "";
+  }
+
+  function openCreateForm() {
+    if (showCreateForm) {
+      scrollToSection("create-tournament");
+      return;
+    }
+
+    scrollCreateForm.current = true;
+    setShowCreateForm(true);
   }
 
   function startNewTournament() {
@@ -1871,7 +2009,7 @@ export default function HomePage() {
       "activeTournamentId"
     );
 
-    window.location.href = "/?create=1";
+    window.location.href = "/?create=1#create-tournament";
   }
 
   function goTournamentHistory() {
@@ -1948,7 +2086,7 @@ export default function HomePage() {
           <div className="mb-6 grid gap-4 sm:mb-8 md:grid-cols-2">
             <button
               type="button"
-              onClick={() => setShowCreateForm(true)}
+              onClick={openCreateForm}
               className="rounded-2xl border border-emerald-800 bg-emerald-950/30 p-5 text-left transition hover:bg-emerald-950/50 sm:p-6"
             >
               <div className="text-3xl">➕</div>
@@ -1999,7 +2137,7 @@ export default function HomePage() {
           {showCreateForm && (
           <div
             id="create-tournament"
-            className="rounded-2xl border border-slate-800 bg-slate-900 p-4 sm:p-6"
+            className="scroll-mt-4 rounded-2xl border border-slate-800 bg-slate-900 p-4 sm:p-6"
           >
             <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-2xl font-bold">
@@ -2018,9 +2156,13 @@ export default function HomePage() {
             <div className="mb-5 grid gap-3 md:grid-cols-3">
               <button
                 type="button"
-                onClick={() =>
-                  setTournamentFormat("individual")
-                }
+                onClick={() => {
+                  if (tournamentFormat !== "individual") {
+                    setPreliminaryRounds(0);
+                  }
+
+                  setTournamentFormat("individual");
+                }}
                 className={`rounded-xl border p-4 text-left ${
                   tournamentFormat === "individual"
                     ? "border-emerald-600 bg-emerald-950/40"
@@ -2029,7 +2171,7 @@ export default function HomePage() {
               >
                 <div className="font-black">Individual doubles</div>
                 <p className="mt-1 text-sm text-slate-400">
-                  Mixed pairings, full random pairing, Top 16 knockout.
+                  Mixed pairings, full random pairing, best-of-3 knockout.
                 </p>
               </button>
 
@@ -2119,7 +2261,7 @@ export default function HomePage() {
                           )
                         );
                       }}
-                      placeholder="24"
+                      placeholder="12"
                       className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base outline-none focus:border-emerald-500"
                     />
                     <p className="mt-2 text-xs leading-5 text-slate-500">
@@ -2192,30 +2334,38 @@ export default function HomePage() {
                   Preliminary Rounds
                 </label>
 
-                <select
-                  value={
-                    preliminaryRounds
-                  }
-                  onChange={(e) =>
+                <input
+                  type="number"
+                  min={INDIVIDUAL_MIN_PRELIM_ROUNDS}
+                  max={INDIVIDUAL_MAX_PRELIM_ROUNDS}
+                  step={1}
+                  value={preliminaryRounds || ""}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+
+                    if (raw === "") {
+                      setPreliminaryRounds(0);
+                      return;
+                    }
+
+                    if (!/^\d+$/.test(raw)) {
+                      return;
+                    }
+
                     setPreliminaryRounds(
-                      Number(
-                        e.target.value
+                      Math.min(
+                        Number(raw),
+                        INDIVIDUAL_MAX_PRELIM_ROUNDS
                       )
-                    )
-                  }
-                  className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base"
-                >
-                  {[4, 5, 6, 7, 8].map(
-                    (round) => (
-                      <option
-                        key={round}
-                        value={round}
-                      >
-                        {round} Rounds
-                      </option>
-                    )
-                  )}
-                </select>
+                    );
+                  }}
+                  placeholder="Enter rounds"
+                  className="min-h-12 w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-base outline-none focus:border-emerald-500"
+                />
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Type any count from {INDIVIDUAL_MIN_PRELIM_ROUNDS} to{" "}
+                  {INDIVIDUAL_MAX_PRELIM_ROUNDS}.
+                </p>
               </div>
               )}
 
@@ -2254,8 +2404,11 @@ export default function HomePage() {
               <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm leading-6 text-slate-300">
                 Pairings are fully random in every round until the
                 Final. After prelims, the Top 16 play best-of-3
-                quarterfinals, semifinals, and final. The Final
-                keeps the two semifinal winning pairs together.
+                quarterfinals, semifinals, and final. With 12
+                players, the Top 8 go straight to best-of-3
+                semifinals. The Final keeps the two semifinal
+                winning pairs together, and the two losing pairs
+                play for 3rd place.
               </div>
             )}
 
@@ -2577,14 +2730,29 @@ export default function HomePage() {
     );
   }
 
-  const finalMatch =
+  const scheduledFinal =
     currentRound?.round_type === "final"
-      ? matches.find(
-          (match) =>
-            match.winner_team === 1 ||
-            match.winner_team === 2
-        )
+      ? championshipMatch(matches)
       : undefined;
+
+  const finalMatch =
+    scheduledFinal &&
+    (scheduledFinal.winner_team === 1 ||
+      scheduledFinal.winner_team === 2)
+      ? scheduledFinal
+      : undefined;
+
+  const scheduledThird =
+    currentRound?.round_type === "final"
+      ? thirdPlaceMatch(matches)
+      : undefined;
+
+  const thirdPlaceWinners = scheduledThird?.winner_team
+    ? getTeamPlayers(
+        scheduledThird.id,
+        scheduledThird.winner_team
+      )
+    : [];
 
   const champions = finalMatch?.winner_team
     ? getTeamPlayers(
@@ -2783,7 +2951,7 @@ export default function HomePage() {
               </p>
 
               <p className="mt-1 text-lg font-bold sm:text-xl">
-                {completedMatches} /{" "}
+                {completedInRound} /{" "}
                 {matches.length}
               </p>
             </div>
@@ -2972,10 +3140,11 @@ export default function HomePage() {
                           >
                             <div className="mb-4 flex items-center justify-between gap-3">
                               <h3 className="text-base font-bold sm:text-lg">
-                                Match{" "}
-                                {
-                                  match.match_number
-                                }
+                                {finalsScheduleLabel(
+                                  currentRound.round_type,
+                                  match.match_number,
+                                  matches.length
+                                )}
                               </h3>
 
                               <span
@@ -3145,10 +3314,24 @@ export default function HomePage() {
               );
             })}
 
+            {(!tournament.format ||
+              tournament.format === "individual") && (
+              <CompletedMatches
+                tournamentId={tournament.id}
+                matches={completedMatches}
+                onSaved={() =>
+                  loadTournamentData(tournament.id)
+                }
+              />
+            )}
+
             {isCurrentRoundComplete() &&
               currentRound.round_type !==
                 "final" && (
-                <div className="mt-8 rounded-2xl border border-emerald-800 bg-emerald-950/30 p-5 sm:p-6">
+                <div
+                  id="next-round"
+                  className="mt-8 scroll-mt-4 rounded-2xl border border-emerald-800 bg-emerald-950/30 p-5 sm:p-6"
+                >
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                     <div className="min-w-0">
                       <h2 className="text-xl font-bold text-emerald-400 sm:text-2xl">
@@ -3221,6 +3404,18 @@ export default function HomePage() {
                           </div>
                         </div>
                       )}
+
+                      {thirdPlaceWinners.length > 0 && (
+                        <div className="min-w-0 rounded-xl border border-amber-800 bg-amber-950/20 p-4 md:col-span-2">
+                          <div className="text-xs font-bold uppercase tracking-widest text-amber-400">
+                            3rd Place
+                          </div>
+
+                          <div className="mt-2 break-words text-lg font-black text-amber-200">
+                            {formatDoublesTeam(thirdPlaceWinners)}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -3258,15 +3453,15 @@ export default function HomePage() {
               )}
 
             {tournament.format !== "split_pairs" &&
-              top16.length === 16 && (
+              top16.length === knockoutQualifierCount() && (
               <div className="mt-8 rounded-2xl border border-purple-800 bg-purple-950/20 p-5 sm:p-6">
                 <h2 className="text-xl font-bold text-purple-300 sm:text-2xl">
-                  🏆 Top 16 Qualified
+                  🏆 Top {knockoutQualifierCount()} Qualified
                 </h2>
 
                 <p className="mt-2 text-sm leading-6 text-slate-400">
-                  These players will enter the
-                  Quarterfinals.
+                  Final standings for the top{" "}
+                  {knockoutQualifierCount()} places.
                 </p>
 
                 <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">

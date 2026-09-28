@@ -1,15 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import AppNav from "@/app/components/AppNav";
-import { formatDoublesTeam } from "@/lib/finalResult";
+import {
+  championshipMatch,
+  finalsScheduleLabel,
+  formatDoublesTeam,
+  thirdPlaceMatch,
+} from "@/lib/finalResult";
 import {
   sanitizeScoreInput,
   scoreRuleHint,
   validateCompletedScore,
 } from "@/lib/scoreValidation";
 import BestOfThreeScoreInputs from "@/app/components/BestOfThreeScoreInputs";
+import CompletedMatches from "@/app/components/CompletedMatches";
+import {
+  loadCompletedMatches,
+  type CompletedMatchView,
+} from "@/lib/individualMatchEdit";
+import { scrollToSection } from "@/lib/scrollToSection";
 import {
   emptyGameInputs,
   formatMatchScoreLine,
@@ -97,6 +108,8 @@ type MatchView = Match & {
   team2Players: Player[];
 };
 
+type HubView = "live" | "standings" | "results" | "progress";
+
 const roundTypeLabel: Record<Round["round_type"], string> = {
   preliminary: "Preliminary",
   quarterfinal: "Quarterfinals",
@@ -111,11 +124,15 @@ function formatPoints(value: number | null | undefined) {
   return Number(value || 0).toFixed(1).replace(".0", "");
 }
 
-function getRoundTitle(round: Round | null) {
+function getRoundTitle(round: Round | null, matchCount = 1) {
   if (!round) return "No Round";
 
   if (round.round_type === "preliminary") {
     return `Round ${round.round_number}`;
+  }
+
+  if (round.round_type === "final" && matchCount > 1) {
+    return "Final & 3rd Place";
   }
 
   return roundTypeLabel[round.round_type];
@@ -123,7 +140,8 @@ function getRoundTitle(round: Round | null) {
 
 function getStageDescription(
   round: Round | null,
-  tournament: Tournament | null
+  tournament: Tournament | null,
+  matchCount = 1
 ) {
   if (!round || !tournament) return "";
 
@@ -136,7 +154,11 @@ function getStageDescription(
   }
 
   if (round.round_type === "semifinal") {
-    return "Top 8 Knockout";
+    return tournament.total_players < 16 ? "Top 8 Semifinals" : "Top 8 Knockout";
+  }
+
+  if (round.round_type === "final" && matchCount > 1) {
+    return "Final and 3rd place. Semifinal pairs stay together.";
   }
 
   return "Championship Match";
@@ -148,6 +170,9 @@ export default function ControlCenterPage() {
   const [rounds, setRounds] = useState<Round[]>([]);
   const [currentRound, setCurrentRound] = useState<Round | null>(null);
   const [matches, setMatches] = useState<MatchView[]>([]);
+  const [completedMatches, setCompletedMatches] = useState<
+    CompletedMatchView[]
+  >([]);
   const [standings, setStandings] = useState<Standing[]>([]);
 
   const [scoreInputs, setScoreInputs] = useState<
@@ -159,6 +184,10 @@ export default function ControlCenterPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [activeView, setActiveView] = useState<HubView>("live");
+  const [matchFilter, setMatchFilter] = useState<"open" | "all">("open");
+  const [courtFilter, setCourtFilter] = useState<number | null>(null);
+  const dirtyMatchIds = useRef(new Set<string>());
 
   const loadControlCenter = useCallback(async () => {
     try {
@@ -175,6 +204,7 @@ export default function ControlCenterPage() {
         setRounds([]);
         setCurrentRound(null);
         setMatches([]);
+        setCompletedMatches([]);
         setStandings([]);
         return;
       }
@@ -184,10 +214,22 @@ export default function ControlCenterPage() {
           .from("tournaments")
           .select("*")
           .eq("id", activeTournamentId)
-          .single();
+          .maybeSingle();
 
       if (tournamentError) {
         throw tournamentError;
+      }
+
+      if (!tournamentData) {
+        localStorage.removeItem("activeTournamentId");
+        setTournament(null);
+        setPlayers([]);
+        setRounds([]);
+        setCurrentRound(null);
+        setMatches([]);
+        setCompletedMatches([]);
+        setStandings([]);
+        return;
       }
 
       if (tournamentData.format === "team_groups") {
@@ -270,6 +312,17 @@ export default function ControlCenterPage() {
 
       setCurrentRound(activeRound);
 
+      if (
+        !tournamentData.format ||
+        tournamentData.format === "individual"
+      ) {
+        setCompletedMatches(
+          await loadCompletedMatches(activeTournamentId)
+        );
+      } else {
+        setCompletedMatches([]);
+      }
+
       const { data: matchData, error: matchesError } = await supabase
         .from("matches")
         .select("*")
@@ -346,7 +399,17 @@ export default function ControlCenterPage() {
         };
       });
 
-      setScoreInputs(initialScores);
+      setScoreInputs((current) => {
+        const next = { ...initialScores };
+
+        dirtyMatchIds.current.forEach((matchId) => {
+          if (current[matchId] && next[matchId]) {
+            next[matchId] = current[matchId];
+          }
+        });
+
+        return next;
+      });
     } catch (err: unknown) {
       console.error("Control center load error:", err);
       setError(
@@ -411,7 +474,7 @@ export default function ControlCenterPage() {
       });
   }, [players, standings]);
 
-  const completedMatches = useMemo(
+  const finishedInRound = useMemo(
     () =>
       matches.filter(
         (match) =>
@@ -431,35 +494,38 @@ export default function ControlCenterPage() {
     [matches]
   );
 
-  const matchesByCourt = useMemo(() => {
+  const visibleMatches = useMemo(
+    () =>
+      matches.filter((match) => {
+        const onCourt =
+          courtFilter === null || match.court_number === courtFilter;
+        const isOpen =
+          match.status !== "completed" && match.winner_team === null;
+
+        return onCourt && (matchFilter === "all" || isOpen);
+      }),
+    [courtFilter, matchFilter, matches]
+  );
+
+  const visibleMatchesByCourt = useMemo(() => {
     const grouped: Record<number, MatchView[]> = {};
 
-    matches.forEach((match) => {
+    visibleMatches.forEach((match) => {
       const court = match.court_number || 1;
-
-      if (!grouped[court]) {
-        grouped[court] = [];
-      }
-
+      grouped[court] = grouped[court] || [];
       grouped[court].push(match);
     });
 
-    Object.keys(grouped).forEach((court) => {
-      grouped[Number(court)].sort(
-        (a, b) => a.match_number - b.match_number
-      );
-    });
-
     return grouped;
-  }, [matches]);
+  }, [visibleMatches]);
 
   const progress = useMemo(() => {
     if (!currentRound || matches.length === 0) return 0;
 
     return Math.round(
-      (completedMatches.length / matches.length) * 100
+      (finishedInRound.length / matches.length) * 100
     );
-  }, [currentRound, matches.length, completedMatches.length]);
+  }, [currentRound, matches.length, finishedInRound.length]);
 
   const tournamentProgress = useMemo(() => {
     if (!tournament) return 0;
@@ -495,14 +561,18 @@ export default function ControlCenterPage() {
       return null;
     }
 
-    const finalMatch = matches.find(
-      (match) =>
-        match.winner_team === 1 || match.winner_team === 2
-    );
+    const finalMatch = championshipMatch(matches);
+    const bronzeMatch = thirdPlaceMatch(matches);
 
     if (!finalMatch?.winner_team) {
       return null;
     }
+
+    const thirdPlaceWinners = bronzeMatch?.winner_team
+      ? bronzeMatch.winner_team === 1
+        ? bronzeMatch.team1Players
+        : bronzeMatch.team2Players
+      : [];
 
     return {
       champions:
@@ -513,6 +583,7 @@ export default function ControlCenterPage() {
         finalMatch.winner_team === 1
           ? finalMatch.team2Players
           : finalMatch.team1Players,
+      thirdPlaceWinners,
     };
   }, [isTournamentCompleted, matches]);
 
@@ -527,6 +598,7 @@ export default function ControlCenterPage() {
       return;
     }
 
+    dirtyMatchIds.current.add(matchId);
     setScoreInputs((current) => ({
       ...current,
       [matchId]: {
@@ -546,6 +618,7 @@ export default function ControlCenterPage() {
     team: "team1" | "team2",
     value: string
   ) => {
+    dirtyMatchIds.current.add(matchId);
     setScoreInputs((current) => {
       const existing = current[matchId] || {
         team1: "",
@@ -637,8 +710,17 @@ export default function ControlCenterPage() {
         winnerTeam = team1Score > team2Score ? 1 : 2;
         team1Rally = team1Score;
         team2Rally = team2Score;
-        winnerPoints = Math.max(team1Score, team2Score) / 2;
-        loserPoints = Math.min(team1Score, team2Score) / 2;
+        const winningScore = Math.max(team1Score, team2Score);
+        const losingScore = Math.min(team1Score, team2Score);
+        const fullPrelimScore =
+          currentRound?.round_type === "preliminary";
+
+        winnerPoints = fullPrelimScore
+          ? winningScore
+          : winningScore / 2;
+        loserPoints = fullPrelimScore
+          ? losingScore
+          : losingScore / 2;
       }
 
       if (
@@ -682,6 +764,21 @@ export default function ControlCenterPage() {
         );
       }
 
+      const fullPrelimScore =
+        currentRound?.round_type === "preliminary";
+      const team1PointsFor = fullPrelimScore
+        ? team1Rally
+        : team1Rally / 2;
+      const team1PointsAgainst = fullPrelimScore
+        ? team2Rally
+        : team2Rally / 2;
+      const team2PointsFor = fullPrelimScore
+        ? team2Rally
+        : team2Rally / 2;
+      const team2PointsAgainst = fullPrelimScore
+        ? team1Rally
+        : team1Rally / 2;
+
       const team1Winner = winnerTeam === 1;
 
       const team1Players = match.team1Players;
@@ -717,10 +814,10 @@ export default function ControlCenterPage() {
               (isWinner ? 0 : 1),
             points_for:
               Number(existingStanding.points_for || 0) +
-              team1Rally / 2,
+              team1PointsFor,
             points_against:
               Number(existingStanding.points_against || 0) +
-              team2Rally / 2,
+              team1PointsAgainst,
             tournament_points:
               Number(existingStanding.tournament_points || 0) +
               points,
@@ -763,10 +860,10 @@ export default function ControlCenterPage() {
               (isWinner ? 0 : 1),
             points_for:
               Number(existingStanding.points_for || 0) +
-              team2Rally / 2,
+              team2PointsFor,
             points_against:
               Number(existingStanding.points_against || 0) +
-              team1Rally / 2,
+              team2PointsAgainst,
             tournament_points:
               Number(existingStanding.tournament_points || 0) +
               points,
@@ -836,6 +933,7 @@ export default function ControlCenterPage() {
           : "Match result saved successfully."
       );
 
+      dirtyMatchIds.current.delete(match.id);
       await loadControlCenter();
     } catch (err: unknown) {
       console.error("Save match error:", err);
@@ -865,7 +963,7 @@ export default function ControlCenterPage() {
 
   const goNewTournament = () => {
     localStorage.removeItem("activeTournamentId");
-    window.location.href = "/";
+    window.location.href = "/?create=1#create-tournament";
   };
 
   const goTournamentHistory = () => {
@@ -879,7 +977,12 @@ export default function ControlCenterPage() {
      *
      * Your existing app/page.tsx will display the next-round controls.
      */
-    window.location.href = "/";
+    window.location.href = "/#next-round";
+  };
+
+  const selectHubView = (view: HubView) => {
+    setActiveView(view);
+    scrollToSection("hub-content");
   };
 
   if (loading) {
@@ -939,8 +1042,15 @@ export default function ControlCenterPage() {
     );
   }
 
+  const hubItems: { id: HubView; label: string }[] = [
+    { id: "live", label: "Live" },
+    { id: "standings", label: "Standings" },
+    { id: "results", label: "Results" },
+    { id: "progress", label: "Progress" },
+  ];
+
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-6 text-white md:px-6">
+    <main className="min-h-screen bg-slate-950 px-4 py-5 pb-36 text-white md:px-6 md:py-6 md:pb-8">
       <div className="mx-auto max-w-7xl">
         {/* HEADER */}
         <header className="mb-6">
@@ -950,12 +1060,14 @@ export default function ControlCenterPage() {
                 <span className="text-4xl">🏸</span>
 
                 <div>
-                  <h1 className="text-2xl font-black md:text-3xl">
-                    Tournament Control Center
+                  <h1 className="text-xl font-black md:text-3xl">
+                    {tournament.name}
                   </h1>
 
                   <p className="mt-1 text-sm text-slate-400">
-                    {tournament.name}
+                    {currentRound
+                      ? getRoundTitle(currentRound, matches.length)
+                      : "Tournament Control Center"}
                   </p>
                 </div>
               </div>
@@ -987,7 +1099,72 @@ export default function ControlCenterPage() {
           </div>
         )}
 
+        <nav
+          aria-label="Control center sections"
+          className="mb-6 hidden rounded-xl border border-slate-800 bg-slate-900 p-1 md:grid md:grid-cols-4"
+        >
+          {hubItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => selectHubView(item.id)}
+              className={`min-h-11 rounded-lg px-4 py-2 text-sm font-bold transition ${
+                activeView === item.id
+                  ? "bg-emerald-600 text-white"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-white"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="fixed inset-x-4 bottom-20 z-30 md:sticky md:inset-x-auto md:top-4 md:mb-6">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-900/95 p-3 backdrop-blur">
+            <div className="min-w-0">
+              <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
+                {allCurrentMatchesCompleted &&
+                currentRound?.status === "completed" &&
+                !isTournamentCompleted
+                  ? "Round complete"
+                  : "Current round"}
+              </div>
+              <div className="truncate text-sm font-semibold">
+                {allCurrentMatchesCompleted &&
+                currentRound?.status === "completed" &&
+                !isTournamentCompleted
+                  ? "Ready to generate the next stage"
+                  : `${pendingMatches.length} match${
+                      pendingMatches.length === 1 ? "" : "es"
+                    } remaining`}
+              </div>
+            </div>
+            {allCurrentMatchesCompleted &&
+            currentRound?.status === "completed" &&
+            !isTournamentCompleted ? (
+              <button
+                type="button"
+                onClick={goGenerateNextRound}
+                className="shrink-0 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-black hover:bg-emerald-500"
+              >
+                Next round
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => selectHubView("live")}
+                className="shrink-0 rounded-lg border border-slate-700 px-4 py-2 text-sm font-bold hover:bg-slate-800"
+              >
+                Open live
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div id="hub-content" className="scroll-mt-4" />
+
         {/* TOURNAMENT SUMMARY */}
+        {activeView === "progress" && (
         <section className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
             <div className="text-xs uppercase tracking-wide text-slate-500">
@@ -1025,12 +1202,20 @@ export default function ControlCenterPage() {
             <div className="mt-1 text-2xl font-black">
               {tournament.format === "split_pairs"
                 ? "Champ / Plate"
-                : `Top ${tournament.qualification_count}`}
+                : `Top ${
+                    tournament.format === "team_groups"
+                      ? tournament.qualification_count
+                      : tournament.total_players < 16
+                        ? 8
+                        : 16
+                  }`}
             </div>
           </div>
         </section>
+        )}
 
         {/* TOURNAMENT STATUS */}
+        {activeView === "progress" && (
         <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-5">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -1064,7 +1249,8 @@ export default function ControlCenterPage() {
                 <p className="mt-1 text-sm text-slate-400">
                   {getStageDescription(
                     currentRound,
-                    tournament
+                    tournament,
+                    matches.length
                   )}
                 </p>
               )}
@@ -1087,9 +1273,10 @@ export default function ControlCenterPage() {
             </div>
           </div>
         </section>
+        )}
 
         {/* CURRENT ROUND */}
-        {currentRound && (
+        {activeView === "live" && currentRound && (
           <section className="mb-8">
             <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
@@ -1098,13 +1285,14 @@ export default function ControlCenterPage() {
                 </div>
 
                 <h2 className="text-2xl font-black">
-                  {getRoundTitle(currentRound)}
+                  {getRoundTitle(currentRound, matches.length)}
                 </h2>
 
                 <p className="text-sm text-slate-400">
                   {getStageDescription(
                     currentRound,
-                    tournament
+                    tournament,
+                    matches.length
                   )}
                 </p>
 
@@ -1119,7 +1307,7 @@ export default function ControlCenterPage() {
               <div className="min-w-[220px]">
                 <div className="mb-2 flex justify-between text-xs text-slate-400">
                   <span>
-                    {completedMatches.length} /{" "}
+                    {finishedInRound.length} /{" "}
                     {matches.length} matches
                   </span>
 
@@ -1137,6 +1325,89 @@ export default function ControlCenterPage() {
               </div>
             </div>
 
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="inline-flex rounded-lg border border-slate-800 bg-slate-900 p-1">
+                {(["open", "all"] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    type="button"
+                    onClick={() => setMatchFilter(filter)}
+                    className={`min-h-10 rounded-md px-4 py-2 text-sm font-bold capitalize ${
+                      matchFilter === filter
+                        ? "bg-emerald-600 text-white"
+                        : "text-slate-400 hover:bg-slate-800"
+                    }`}
+                  >
+                    {filter}
+                    {filter === "open" ? ` (${pendingMatches.length})` : ""}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => setCourtFilter(null)}
+                  className={`min-h-10 shrink-0 rounded-lg px-3 py-2 text-sm font-bold ${
+                    courtFilter === null
+                      ? "bg-slate-700 text-white"
+                      : "border border-slate-800 text-slate-400"
+                  }`}
+                >
+                  All courts
+                </button>
+                {Array.from(
+                  { length: tournament.courts },
+                  (_, index) => index + 1
+                ).map((court) => (
+                  <button
+                    key={court}
+                    type="button"
+                    onClick={() => setCourtFilter(court)}
+                    className={`min-h-10 shrink-0 rounded-lg px-3 py-2 text-sm font-bold ${
+                      courtFilter === court
+                        ? "bg-slate-700 text-white"
+                        : "border border-slate-800 text-slate-400"
+                    }`}
+                  >
+                    Court {court}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {finishedInRound.length > 0 && matchFilter === "open" && (
+              <button
+                type="button"
+                onClick={() => setMatchFilter("all")}
+                className="mb-4 flex w-full items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-left"
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-bold uppercase tracking-widest text-slate-500">
+                    Latest result
+                  </span>
+                  <span className="block truncate text-sm font-semibold">
+                    {finishedInRound[
+                      finishedInRound.length - 1
+                    ].team1Players
+                      .map((player) => player.name)
+                      .join(" + ")}{" "}
+                    vs{" "}
+                    {finishedInRound[
+                      finishedInRound.length - 1
+                    ].team2Players
+                      .map((player) => player.name)
+                      .join(" + ")}
+                  </span>
+                </span>
+                <span className="shrink-0 font-black text-emerald-400">
+                  {formatMatchScoreLine(
+                    finishedInRound[finishedInRound.length - 1]
+                  )}
+                </span>
+              </button>
+            )}
+
             {/* COURTS */}
             <div className="grid gap-5 lg:grid-cols-3">
               {Array.from(
@@ -1146,7 +1417,15 @@ export default function ControlCenterPage() {
                 (_, index) => index + 1
               ).map((courtNumber) => {
                 const courtMatches =
-                  matchesByCourt[courtNumber] || [];
+                  visibleMatchesByCourt[courtNumber] || [];
+
+                if (courtFilter !== null && courtFilter !== courtNumber) {
+                  return null;
+                }
+
+                if (courtMatches.length === 0 && matchFilter === "open") {
+                  return null;
+                }
 
                 return (
                   <div
@@ -1202,6 +1481,38 @@ export default function ControlCenterPage() {
                           tournament.format
                         );
 
+                        if (completed) {
+                          return (
+                            <div
+                              key={match.id}
+                              className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold">
+                                    {match.team1Players
+                                      .map((player) => player.name)
+                                      .join(" + ")}
+                                  </div>
+                                  <div className="truncate text-sm text-slate-400">
+                                    {match.team2Players
+                                      .map((player) => player.name)
+                                      .join(" + ")}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <div className="font-black text-emerald-400">
+                                    {formatMatchScoreLine(match)}
+                                  </div>
+                                  <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                    Completed
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div
                             key={match.id}
@@ -1213,7 +1524,11 @@ export default function ControlCenterPage() {
                           >
                             <div className="mb-4 flex items-center justify-between">
                               <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                                Match {match.match_number}
+                                {finalsScheduleLabel(
+                                  currentRound.round_type,
+                                  match.match_number,
+                                  matches.length
+                                )}
                               </span>
 
                               {completed ? (
@@ -1354,17 +1669,6 @@ export default function ControlCenterPage() {
                               </button>
                             )}
 
-                            {completed && (
-                              <div className="mt-4 text-center text-xs text-slate-500">
-                                {formatMatchScoreLine(match)}
-                                {match.winner_team && (
-                                  <span className="ml-2 text-emerald-400">
-                                    • Team{" "}
-                                    {match.winner_team} wins
-                                  </span>
-                                )}
-                              </div>
-                            )}
                           </div>
                         );
                       })}
@@ -1373,11 +1677,42 @@ export default function ControlCenterPage() {
                 );
               })}
             </div>
+
+            {visibleMatches.length === 0 && (
+              <div className="rounded-2xl border border-dashed border-slate-700 p-8 text-center">
+                <div className="font-bold">No open matches</div>
+                <p className="mt-1 text-sm text-slate-400">
+                  Switch to All to review finished matches from this round.
+                </p>
+              </div>
+            )}
           </section>
         )}
 
+        {activeView === "results" &&
+          (!tournament.format ||
+          tournament.format === "individual") && (
+          <CompletedMatches
+            tournamentId={tournament.id}
+            matches={completedMatches}
+            onSaved={loadControlCenter}
+          />
+        )}
+        {activeView === "results" &&
+          completedMatches.length === 0 && (
+            <section className="rounded-2xl border border-dashed border-slate-700 p-10 text-center">
+              <h2 className="text-xl font-black">
+                No completed matches yet
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                Finished scores will be grouped here by round.
+              </p>
+            </section>
+          )}
+
         {/* ROUND COMPLETE */}
-        {currentRound &&
+        {activeView === "progress" &&
+          currentRound &&
           allCurrentMatchesCompleted &&
           currentRound.status === "completed" &&
           !isTournamentCompleted && (
@@ -1409,7 +1744,7 @@ export default function ControlCenterPage() {
           )}
 
         {/* FINAL COMPLETED */}
-        {isTournamentCompleted && (
+        {activeView === "progress" && isTournamentCompleted && (
           <section className="mb-8 overflow-hidden rounded-2xl border border-yellow-700 bg-gradient-to-br from-yellow-950/50 to-slate-950 p-8 text-center">
             <div className="text-6xl">🏆</div>
 
@@ -1436,6 +1771,17 @@ export default function ControlCenterPage() {
                     {formatDoublesTeam(finalTeams.runnersUp)}
                   </div>
                 </div>
+
+                {finalTeams.thirdPlaceWinners.length > 0 && (
+                  <div className="rounded-xl border border-amber-800 bg-amber-950/20 p-4 md:col-span-2">
+                    <div className="text-xs font-bold uppercase tracking-widest text-amber-400">
+                      3rd Place
+                    </div>
+                    <div className="mt-2 text-lg font-black text-amber-200">
+                      {formatDoublesTeam(finalTeams.thirdPlaceWinners)}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1469,6 +1815,7 @@ export default function ControlCenterPage() {
         )}
 
         {/* LEADERBOARD PREVIEW */}
+        {activeView === "standings" && (
         <section className="mb-8">
           <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
@@ -1494,7 +1841,58 @@ export default function ControlCenterPage() {
             </button>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+          <div className="space-y-2 md:hidden">
+            {standingsWithPlayers.map((row, index) => {
+              const rank = index + 1;
+              const qualificationCount =
+                tournament.total_players < 16 ? 8 : 16;
+
+              return (
+                <article
+                  key={row.player_id}
+                  className={`rounded-xl border p-4 ${
+                    rank <= qualificationCount
+                      ? "border-emerald-900 bg-emerald-950/20"
+                      : "border-slate-800 bg-slate-900"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="w-8 shrink-0 text-center text-lg font-black text-slate-400">
+                        {rank}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate font-black">
+                          {row.player?.name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {row.matches_played} played · {row.wins} wins ·{" "}
+                          {row.losses} losses
+                        </div>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-lg font-black text-emerald-400">
+                        {formatPoints(row.tournament_points)}
+                      </div>
+                      <div
+                        className={`text-xs font-bold ${
+                          row.pointDifference >= 0
+                            ? "text-emerald-400"
+                            : "text-red-400"
+                        }`}
+                      >
+                        {row.pointDifference > 0 ? "+" : ""}
+                        {formatPoints(row.pointDifference)} diff
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="hidden overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 md:block">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[700px] text-left text-sm">
                 <thead className="border-b border-slate-800 bg-slate-950 text-xs uppercase tracking-wide text-slate-500">
@@ -1635,9 +2033,11 @@ export default function ControlCenterPage() {
             </div>
           </div>
         </section>
+        )}
 
         {/* QUALIFICATION / KNOCKOUT STATUS */}
-        <section className="mb-8 grid gap-4 md:grid-cols-3">
+        {activeView === "progress" && (
+        <section className="mb-8 space-y-3">
           <div
             className={`rounded-2xl border p-5 ${
               rounds.some(
@@ -1663,6 +2063,33 @@ export default function ControlCenterPage() {
               ).length}{" "}
               of {tournament.preliminary_rounds} completed
             </p>
+          </div>
+
+          <div
+            className={`rounded-2xl border p-5 ${
+              rounds.some(
+                (round) =>
+                  round.round_type === "semifinal" &&
+                  round.status === "completed"
+              )
+                ? "border-emerald-800 bg-emerald-950/20"
+                : "border-slate-800 bg-slate-900"
+            }`}
+          >
+            <div className="text-xs font-bold uppercase tracking-widest text-slate-500">
+              Knockout stage
+            </div>
+            <h3 className="mt-2 font-black">Semifinals</h3>
+            <p className="mt-1 text-sm text-slate-400">
+              Two best-of-3 matches
+            </p>
+            {rounds.some(
+              (round) => round.round_type === "semifinal"
+            ) && (
+              <div className="mt-2 text-xs font-bold text-emerald-400">
+                Generated
+              </div>
+            )}
           </div>
 
           <div
@@ -1732,8 +2159,10 @@ export default function ControlCenterPage() {
             )}
           </div>
         </section>
+        )}
 
         {/* BOTTOM NAV */}
+        {activeView === "progress" && (
         <footer className="border-t border-slate-800 py-8">
           <div className="flex flex-wrap justify-center gap-3">
             <button
@@ -1769,6 +2198,27 @@ export default function ControlCenterPage() {
             Shuttle and Chill Control Center
           </div>
         </footer>
+        )}
+
+        <nav
+          aria-label="Control center sections"
+          className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-4 border-t border-slate-700 bg-slate-950/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur md:hidden"
+        >
+          {hubItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => selectHubView(item.id)}
+              className={`min-h-12 rounded-lg px-1 py-2 text-xs font-bold ${
+                activeView === item.id
+                  ? "bg-emerald-600 text-white"
+                  : "text-slate-400"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
       </div>
     </main>
   );

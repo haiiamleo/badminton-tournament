@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import AppNav from "@/app/components/AppNav";
 import { deleteTournament } from "@/lib/deleteTournament";
 import {
+  finalsScheduleLabel,
   formatDoublesTeam,
   getDoublesFinalResult,
   getSplitPairFinalResults,
@@ -16,6 +17,7 @@ import {
   rankFixedPairs,
   type SplitPool,
 } from "@/lib/splitPairsTournament";
+import { rankTeams } from "@/lib/teamTournament";
 
 type Tournament = {
   id: string;
@@ -1214,7 +1216,10 @@ export default function HistoricalTournamentPage() {
                   <div className="mb-4 flex items-center justify-between">
                     <div>
                       <h3 className="text-xl font-black">
-                        {roundName(round)}
+                        {round.round_type === "final" &&
+                        roundMatches.length > 1
+                          ? "Final & 3rd Place"
+                          : roundName(round)}
                       </h3>
 
                       <p className="text-xs text-slate-500">
@@ -1237,6 +1242,16 @@ export default function HistoricalTournamentPage() {
                           key={match.id}
                           className="rounded-xl border border-slate-800 bg-slate-950 p-4"
                         >
+                          {round.round_type === "final" &&
+                            roundMatches.length > 1 && (
+                              <div className="mb-2 text-xs font-bold uppercase tracking-widest text-amber-400">
+                                {finalsScheduleLabel(
+                                  round.round_type,
+                                  match.match_number,
+                                  roundMatches.length
+                                )}
+                              </div>
+                            )}
                           <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr] md:items-center">
                             <div className="font-semibold">
                               {matchTeams.team1
