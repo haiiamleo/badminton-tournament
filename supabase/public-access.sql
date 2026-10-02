@@ -32,7 +32,8 @@ begin
     'fixtures',
     'fixed_pairs',
     'fixed_pair_players',
-    'fixed_pair_standings'
+    'fixed_pair_standings',
+    'player_draw_numbers'
   ]
   loop
     if exists (

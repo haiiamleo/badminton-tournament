@@ -25,10 +25,16 @@ import {
   emptyGameInputs,
   formatMatchScoreLine,
   gameInputsFromMatch,
+  individualQualificationCount,
   resolveBestOfThree,
   usesBestOfThree,
   type GameScoreInput,
 } from "@/lib/bestOfThree";
+import {
+  drawNumberMap,
+  drawPhaseForRound,
+  type PlayerDrawNumber,
+} from "@/lib/playerDraw";
 
 type Tournament = {
   id: string;
@@ -124,6 +130,18 @@ function formatPoints(value: number | null | undefined) {
   return Number(value || 0).toFixed(1).replace(".0", "");
 }
 
+function roundTabLabel(round: Round) {
+  if (round.round_type === "preliminary") {
+    return `Round ${round.round_number}`;
+  }
+
+  if (round.round_type === "quarterfinal") return "Quarterfinals";
+  if (round.round_type === "semifinal") return "Semifinals";
+  if (round.round_type === "final") return "Final";
+
+  return roundTypeLabel[round.round_type];
+}
+
 function getRoundTitle(round: Round | null, matchCount = 1) {
   if (!round) return "No Round";
 
@@ -154,7 +172,9 @@ function getStageDescription(
   }
 
   if (round.round_type === "semifinal") {
-    return tournament.total_players < 16 ? "Top 8 Semifinals" : "Top 8 Knockout";
+    return individualQualificationCount(tournament.total_players) === 8
+      ? "Top 8 from the prelims"
+      : "Top 8 from the quarterfinals";
   }
 
   if (round.round_type === "final" && matchCount > 1) {
@@ -169,11 +189,16 @@ export default function ControlCenterPage() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [rounds, setRounds] = useState<Round[]>([]);
   const [currentRound, setCurrentRound] = useState<Round | null>(null);
+  const [roundSummaries, setRoundSummaries] = useState<
+    Record<string, { done: number; total: number }>
+  >({});
+  const selectedRoundIdRef = useRef<string | null>(null);
   const [matches, setMatches] = useState<MatchView[]>([]);
   const [completedMatches, setCompletedMatches] = useState<
     CompletedMatchView[]
   >([]);
   const [standings, setStandings] = useState<Standing[]>([]);
+  const [drawNumbers, setDrawNumbers] = useState<PlayerDrawNumber[]>([]);
 
   const [scoreInputs, setScoreInputs] = useState<
     Record<string, ScoreInput>
@@ -206,6 +231,7 @@ export default function ControlCenterPage() {
         setMatches([]);
         setCompletedMatches([]);
         setStandings([]);
+        setDrawNumbers([]);
         return;
       }
 
@@ -229,6 +255,7 @@ export default function ControlCenterPage() {
         setMatches([]);
         setCompletedMatches([]);
         setStandings([]);
+        setDrawNumbers([]);
         return;
       }
 
@@ -243,6 +270,7 @@ export default function ControlCenterPage() {
         playersResponse,
         roundsResponse,
         standingsResponse,
+        drawNumbersResponse,
       ] = await Promise.all([
         supabase
           .from("players")
@@ -260,6 +288,10 @@ export default function ControlCenterPage() {
           .from("player_standings")
           .select("*")
           .eq("tournament_id", activeTournamentId),
+        supabase
+          .from("player_draw_numbers")
+          .select("player_id,phase,draw_number")
+          .eq("tournament_id", activeTournamentId),
       ]);
 
       if (playersResponse.error) {
@@ -274,6 +306,10 @@ export default function ControlCenterPage() {
         throw standingsResponse.error;
       }
 
+      if (drawNumbersResponse.error) {
+        throw drawNumbersResponse.error;
+      }
+
       const loadedPlayers = (playersResponse.data || []) as Player[];
       const loadedRounds = (roundsResponse.data || []) as Round[];
       const loadedStandings = (standingsResponse.data || []) as Standing[];
@@ -281,26 +317,58 @@ export default function ControlCenterPage() {
       setPlayers(loadedPlayers);
       setRounds(loadedRounds);
       setStandings(loadedStandings);
+      setDrawNumbers(
+        (drawNumbersResponse.data || []) as PlayerDrawNumber[]
+      );
 
       if (loadedRounds.length === 0) {
+        selectedRoundIdRef.current = null;
         setCurrentRound(null);
+        setRoundSummaries({});
         setMatches([]);
         return;
       }
 
+      const { data: summaryRows, error: summaryError } = await supabase
+        .from("matches")
+        .select("round_id,status")
+        .in(
+          "round_id",
+          loadedRounds.map((round) => round.id)
+        );
+
+      if (summaryError) {
+        throw summaryError;
+      }
+
+      const summaries: Record<string, { done: number; total: number }> =
+        {};
+
+      (summaryRows || []).forEach((row) => {
+        const summary = summaries[row.round_id] || { done: 0, total: 0 };
+        summary.total += 1;
+
+        if (row.status === "completed") {
+          summary.done += 1;
+        }
+
+        summaries[row.round_id] = summary;
+      });
+
+      setRoundSummaries(summaries);
+
       /*
-       * Prefer the latest non-completed round.
-       * If everything is completed, use the latest completed round.
+       * Stay on the round the table chose. Otherwise open the first
+       * round that still has matches left.
        */
       const activeRound =
-        [...loadedRounds]
-          .reverse()
-          .find(
-            (round) =>
-              round.status === "in_progress" ||
-              round.status === "generated"
-          ) ||
-        [...loadedRounds].reverse()[0];
+        loadedRounds.find(
+          (round) => round.id === selectedRoundIdRef.current
+        ) ||
+        loadedRounds.find((round) => round.status !== "completed") ||
+        loadedRounds[loadedRounds.length - 1];
+
+      selectedRoundIdRef.current = activeRound.id;
 
       if (
         tournamentData.format === "split_pairs" &&
@@ -474,6 +542,21 @@ export default function ControlCenterPage() {
       });
   }, [players, standings]);
 
+  const activeDrawNumbers = useMemo(
+    () =>
+      drawNumberMap(
+        drawNumbers,
+        drawPhaseForRound(currentRound?.round_type)
+      ),
+    [currentRound?.round_type, drawNumbers]
+  );
+
+  const playerLabel = (player: Player) => {
+    const number = activeDrawNumbers.get(player.id);
+
+    return number ? `#${number} ${player.name}` : player.name;
+  };
+
   const finishedInRound = useMemo(
     () =>
       matches.filter(
@@ -549,12 +632,33 @@ export default function ControlCenterPage() {
         match.winner_team !== null
     );
 
+  const preliminaryRounds = rounds.filter(
+    (round) => round.round_type === "preliminary"
+  );
+  const allPrelimsComplete =
+    Boolean(tournament) &&
+    preliminaryRounds.length >= (tournament?.preliminary_rounds || 0) &&
+    preliminaryRounds.every((round) => round.status === "completed");
+  const laterStageExists = rounds.some(
+    (round) => round.round_type !== "preliminary"
+  );
+
   const isFinalCompleted =
     currentRound?.round_type === "final" &&
     currentRound.status === "completed";
 
   const isTournamentCompleted =
     tournament?.status === "completed" || isFinalCompleted;
+
+  const readyForNextStage =
+    !isTournamentCompleted &&
+    ((currentRound?.round_type === "preliminary" &&
+      allPrelimsComplete &&
+      !laterStageExists) ||
+      (currentRound?.round_type !== "preliminary" &&
+        currentRound?.round_type !== "final" &&
+        allCurrentMatchesCompleted &&
+        currentRound?.status === "completed"));
 
   const finalTeams = useMemo(() => {
     if (!isTournamentCompleted) {
@@ -712,15 +816,8 @@ export default function ControlCenterPage() {
         team2Rally = team2Score;
         const winningScore = Math.max(team1Score, team2Score);
         const losingScore = Math.min(team1Score, team2Score);
-        const fullPrelimScore =
-          currentRound?.round_type === "preliminary";
-
-        winnerPoints = fullPrelimScore
-          ? winningScore
-          : winningScore / 2;
-        loserPoints = fullPrelimScore
-          ? losingScore
-          : losingScore / 2;
+        winnerPoints = winningScore / 2;
+        loserPoints = losingScore / 2;
       }
 
       if (
@@ -764,20 +861,10 @@ export default function ControlCenterPage() {
         );
       }
 
-      const fullPrelimScore =
-        currentRound?.round_type === "preliminary";
-      const team1PointsFor = fullPrelimScore
-        ? team1Rally
-        : team1Rally / 2;
-      const team1PointsAgainst = fullPrelimScore
-        ? team2Rally
-        : team2Rally / 2;
-      const team2PointsFor = fullPrelimScore
-        ? team2Rally
-        : team2Rally / 2;
-      const team2PointsAgainst = fullPrelimScore
-        ? team1Rally
-        : team1Rally / 2;
+      const team1PointsFor = team1Rally / 2;
+      const team1PointsAgainst = team2Rally / 2;
+      const team2PointsFor = team2Rally / 2;
+      const team2PointsAgainst = team1Rally / 2;
 
       const team1Winner = winnerTeam === 1;
 
@@ -1123,25 +1210,17 @@ export default function ControlCenterPage() {
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-900/95 p-3 backdrop-blur">
             <div className="min-w-0">
               <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
-                {allCurrentMatchesCompleted &&
-                currentRound?.status === "completed" &&
-                !isTournamentCompleted
-                  ? "Round complete"
-                  : "Current round"}
+                {readyForNextStage ? "Prelims complete" : "Selected round"}
               </div>
               <div className="truncate text-sm font-semibold">
-                {allCurrentMatchesCompleted &&
-                currentRound?.status === "completed" &&
-                !isTournamentCompleted
+                {readyForNextStage
                   ? "Ready to generate the next stage"
                   : `${pendingMatches.length} match${
                       pendingMatches.length === 1 ? "" : "es"
-                    } remaining`}
+                    } remaining in this round`}
               </div>
             </div>
-            {allCurrentMatchesCompleted &&
-            currentRound?.status === "completed" &&
-            !isTournamentCompleted ? (
+            {readyForNextStage ? (
               <button
                 type="button"
                 onClick={goGenerateNextRound}
@@ -1205,9 +1284,7 @@ export default function ControlCenterPage() {
                 : `Top ${
                     tournament.format === "team_groups"
                       ? tournament.qualification_count
-                      : tournament.total_players < 16
-                        ? 8
-                        : 16
+                      : individualQualificationCount(tournament.total_players)
                   }`}
             </div>
           </div>
@@ -1278,6 +1355,106 @@ export default function ControlCenterPage() {
         {/* CURRENT ROUND */}
         {activeView === "live" && currentRound && (
           <section className="mb-8">
+            {rounds.length > 1 && (
+              <div className="mb-5 flex gap-2 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 p-2">
+                {rounds.map((round) => {
+                  const summary = roundSummaries[round.id];
+                  const active = round.id === currentRound.id;
+
+                  return (
+                    <button
+                      key={round.id}
+                      type="button"
+                      onClick={() => {
+                        selectedRoundIdRef.current = round.id;
+                        loadControlCenter();
+                      }}
+                      className={`min-h-14 min-w-[7.5rem] shrink-0 rounded-lg px-3 py-2 text-left transition ${
+                        active
+                          ? "bg-emerald-600 text-white"
+                          : "text-slate-300 hover:bg-slate-800"
+                      }`}
+                    >
+                      <span className="block text-sm font-black">
+                        {roundTabLabel(round)}
+                      </span>
+                      <span
+                        className={`mt-1 block text-xs font-semibold ${
+                          active ? "text-emerald-100" : "text-slate-500"
+                        }`}
+                      >
+                        {summary
+                          ? `${summary.done}/${summary.total} played`
+                          : "Open"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="mb-5 rounded-2xl border border-slate-800 bg-slate-900 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
+                    Leaderboard
+                  </div>
+                  <p className="text-sm text-slate-400">
+                    {tournament.format === "split_pairs"
+                      ? "Top 10 reach the Championship draw."
+                      : individualQualificationCount(tournament.total_players) ===
+                          16
+                        ? `Top 16 of ${tournament.total_players} reach the quarterfinals.`
+                        : `Top 8 of ${tournament.total_players} reach the semifinals.`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={goLeaderboard}
+                  className="shrink-0 text-sm font-bold text-emerald-400 hover:text-emerald-300"
+                >
+                  Full board
+                </button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {standingsWithPlayers
+                  .slice(
+                    0,
+                    tournament.format === "split_pairs"
+                      ? 10
+                      : individualQualificationCount(tournament.total_players)
+                  )
+                  .map((row, index) => (
+                  <div
+                    key={row.player_id}
+                    className="flex items-center justify-between gap-3 rounded-lg bg-slate-950 px-3 py-2"
+                  >
+                    <div className="min-w-0 truncate">
+                      <span className="mr-2 font-black text-emerald-400">
+                        #{index + 1}
+                      </span>
+                      <span className="font-semibold">
+                        {row.player ? playerLabel(row.player) : "Player"}
+                      </span>
+                    </div>
+                    <div className="shrink-0 text-sm">
+                      <span className="font-black text-yellow-400">
+                        {formatPoints(row.tournament_points)}
+                      </span>
+                      <span className="ml-2 text-slate-500">
+                        {row.wins}-{row.losses}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {standingsWithPlayers.length === 0 && (
+                <p className="text-sm text-slate-500">
+                  Scores will show here after the first match.
+                </p>
+              )}
+            </div>
+
             <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
               <div>
                 <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
@@ -1390,13 +1567,13 @@ export default function ControlCenterPage() {
                     {finishedInRound[
                       finishedInRound.length - 1
                     ].team1Players
-                      .map((player) => player.name)
+                      .map(playerLabel)
                       .join(" + ")}{" "}
                     vs{" "}
                     {finishedInRound[
                       finishedInRound.length - 1
                     ].team2Players
-                      .map((player) => player.name)
+                      .map(playerLabel)
                       .join(" + ")}
                   </span>
                 </span>
@@ -1491,12 +1668,12 @@ export default function ControlCenterPage() {
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-semibold">
                                     {match.team1Players
-                                      .map((player) => player.name)
+                                      .map(playerLabel)
                                       .join(" + ")}
                                   </div>
                                   <div className="truncate text-sm text-slate-400">
                                     {match.team2Players
-                                      .map((player) => player.name)
+                                      .map(playerLabel)
                                       .join(" + ")}
                                   </div>
                                 </div>
@@ -1558,10 +1735,7 @@ export default function ControlCenterPage() {
 
                                   <div className="mt-1 text-sm font-bold">
                                     {match.team1Players
-                                      .map(
-                                        (player) =>
-                                          player.name
-                                      )
+                                      .map(playerLabel)
                                       .join(" + ")}
                                   </div>
                                 </div>
@@ -1607,10 +1781,7 @@ export default function ControlCenterPage() {
 
                                   <div className="mt-1 text-sm font-bold">
                                     {match.team2Players
-                                      .map(
-                                        (player) =>
-                                          player.name
-                                      )
+                                      .map(playerLabel)
                                       .join(" + ")}
                                   </div>
                                 </div>
@@ -1713,9 +1884,7 @@ export default function ControlCenterPage() {
         {/* ROUND COMPLETE */}
         {activeView === "progress" &&
           currentRound &&
-          allCurrentMatchesCompleted &&
-          currentRound.status === "completed" &&
-          !isTournamentCompleted && (
+          readyForNextStage && (
             <section className="mb-8 rounded-2xl border border-emerald-800 bg-emerald-950/30 p-6">
               <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
                 <div>
@@ -1845,7 +2014,9 @@ export default function ControlCenterPage() {
             {standingsWithPlayers.map((row, index) => {
               const rank = index + 1;
               const qualificationCount =
-                tournament.total_players < 16 ? 8 : 16;
+                tournament.format === "split_pairs"
+                  ? 10
+                  : individualQualificationCount(tournament.total_players);
 
               return (
                 <article
@@ -1863,7 +2034,7 @@ export default function ControlCenterPage() {
                       </div>
                       <div className="min-w-0">
                         <div className="truncate font-black">
-                          {row.player?.name}
+                          {row.player ? playerLabel(row.player) : "Player"}
                         </div>
                         <div className="text-xs text-slate-500">
                           {row.matches_played} played · {row.wins} wins ·{" "}
@@ -1924,52 +2095,42 @@ export default function ControlCenterPage() {
                 </thead>
 
                 <tbody>
-                  {standingsWithPlayers
-                    .slice(
-                      0,
-                      tournament.format === "split_pairs" ? 20 : 16
-                    )
-                    .map((row, index) => {
+                  {standingsWithPlayers.map((row, index) => {
                       const rank = index + 1;
+                      const qualificationCount =
+                        tournament.format === "split_pairs"
+                          ? 20
+                          : individualQualificationCount(
+                              tournament.total_players
+                            );
 
                       return (
                         <tr
                           key={row.player_id}
                           className={`border-b border-slate-800 last:border-0 ${
-                            tournament.format === "split_pairs" ||
-                            rank <= tournament.qualification_count
+                            rank <= qualificationCount
                               ? "bg-emerald-950/10"
                               : ""
                           }`}
                         >
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
-                              <span className="font-black">
-                                {rank === 1
-                                  ? "🥇"
-                                  : rank === 2
-                                  ? "🥈"
-                                  : rank === 3
-                                  ? "🥉"
-                                  : rank}
-                              </span>
+                              <span className="font-black">{rank}</span>
 
-                              {(tournament.format === "split_pairs" ||
-                                rank <=
-                                  tournament.qualification_count) && (
+                              {rank <= qualificationCount && (
                                 <span className="rounded-full bg-emerald-950 px-2 py-0.5 text-[9px] font-bold text-emerald-400">
                                   {tournament.format === "split_pairs"
                                     ? rank <= 10
                                       ? "CHAMPIONSHIP"
                                       : "PLATE"
-                                    : `TOP ${tournament.qualification_count}`}
+                                    : `TOP ${individualQualificationCount(tournament.total_players)}`}
                                 </span>
                               )}
                             </div>
                           </td>
 
                           <td className="px-4 py-3 font-bold">
-                            {row.player?.name}
+                            {row.player ? playerLabel(row.player) : "Player"}
                           </td>
 
                           <td className="px-4 py-3 text-center text-slate-400">
@@ -2114,7 +2275,7 @@ export default function ControlCenterPage() {
             <p className="mt-1 text-sm text-slate-400">
               {tournament.format === "split_pairs"
                 ? "Five pairs in each draw"
-                : `Top ${tournament.qualification_count} players`}
+                : `Top ${individualQualificationCount(tournament.total_players)} players`}
             </p>
 
             {rounds.some(

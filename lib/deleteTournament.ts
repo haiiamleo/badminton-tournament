@@ -144,6 +144,15 @@ export async function deleteTournament(tournamentId: string) {
     throw teamsDeleteError;
   }
 
+  const { error: drawNumbersError } = await supabase
+    .from("player_draw_numbers")
+    .delete()
+    .eq("tournament_id", tournamentId);
+
+  if (drawNumbersError && !isMissingRelation(drawNumbersError)) {
+    throw drawNumbersError;
+  }
+
   const { error: standingsError } = await supabase
     .from("player_standings")
     .delete()

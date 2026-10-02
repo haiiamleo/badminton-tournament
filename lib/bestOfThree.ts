@@ -210,11 +210,11 @@ export const INDIVIDUAL_MIN_PRELIM_ROUNDS = 1;
 export const INDIVIDUAL_MAX_PRELIM_ROUNDS = 12;
 
 /*
- * 16+ players: Top 16 play quarterfinals.
- * Fewer than 16: Top 8 go straight to semifinals.
+ * More than 18 players: Top 16 play quarterfinals.
+ * 18 or fewer: Top 8 go straight to semifinals.
  */
 export function individualQualificationCount(playerCount: number) {
-  return playerCount >= 16 ? 16 : 8;
+  return playerCount > 18 ? 16 : 8;
 }
 
 export function isValidIndividualPlayerCount(count: number) {

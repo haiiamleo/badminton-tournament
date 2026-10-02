@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import AppNav from "@/app/components/AppNav";
+import { individualQualificationCount } from "@/lib/bestOfThree";
 import { describeError } from "@/lib/errorMessage";
+import {
+  drawNumberMap,
+  drawPhaseForRound,
+  type PlayerDrawNumber,
+} from "@/lib/playerDraw";
 import { scrollToSection } from "@/lib/scrollToSection";
 import { rankTeams } from "@/lib/teamTournament";
 import {
@@ -69,6 +75,10 @@ export default function LeaderboardPage() {
     "individual" | "team_groups" | "split_pairs"
   >("individual");
   const [tournamentName, setTournamentName] = useState("");
+  const [playerCount, setPlayerCount] = useState(24);
+  const [currentDrawNumbers, setCurrentDrawNumbers] = useState<
+    Record<string, number>
+  >({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
@@ -92,7 +102,7 @@ export default function LeaderboardPage() {
       const { data: tournament, error: tournamentError } =
         await supabase
           .from("tournaments")
-          .select("id, name, format")
+          .select("id, name, format, total_players")
           .eq("id", tournamentId)
           .single();
 
@@ -101,6 +111,7 @@ export default function LeaderboardPage() {
       }
 
       setTournamentName(tournament.name);
+      setPlayerCount(Number(tournament.total_players) || 24);
 
       if (tournament.format === "team_groups") {
         setFormat("team_groups");
@@ -161,6 +172,34 @@ export default function LeaderboardPage() {
 
       if (playersError) {
         throw playersError;
+      }
+
+      if (tournament.format === "individual" || !tournament.format) {
+        const [roundResponse, drawResponse] = await Promise.all([
+          supabase
+            .from("rounds")
+            .select("round_type")
+            .eq("tournament_id", tournamentId)
+            .order("round_number", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            .from("player_draw_numbers")
+            .select("player_id,phase,draw_number")
+            .eq("tournament_id", tournamentId),
+        ]);
+
+        if (roundResponse.error) throw roundResponse.error;
+        if (drawResponse.error) throw drawResponse.error;
+
+        const numbers = drawNumberMap(
+          (drawResponse.data || []) as PlayerDrawNumber[],
+          drawPhaseForRound(roundResponse.data?.round_type)
+        );
+
+        setCurrentDrawNumbers(Object.fromEntries(numbers));
+      } else {
+        setCurrentDrawNumbers({});
       }
 
       if (tournament.format === "split_pairs") {
@@ -311,6 +350,11 @@ export default function LeaderboardPage() {
 
   const splitPairsReady = format === "split_pairs" && pairRows.length > 0;
   const showPairStandings = splitPairsReady && splitView === "pairs";
+
+  const advanceCount =
+    format === "split_pairs"
+      ? 10
+      : individualQualificationCount(playerCount);
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -513,7 +557,7 @@ export default function LeaderboardPage() {
                     <tr
                       key={row.player_id}
                       className={`border-t border-slate-800 ${
-                        row.rank <= (format === "split_pairs" ? 10 : 16)
+                        row.rank <= advanceCount
                           ? "bg-emerald-950/20"
                           : ""
                       }`}
@@ -521,7 +565,7 @@ export default function LeaderboardPage() {
                       <td className="px-4 py-4 font-bold">
                         <span
                           className={
-                            row.rank <= (format === "split_pairs" ? 10 : 16)
+                            row.rank <= advanceCount
                               ? "text-emerald-400"
                               : ""
                           }
@@ -531,6 +575,9 @@ export default function LeaderboardPage() {
                       </td>
 
                       <td className="px-4 py-4 font-semibold">
+                        {currentDrawNumbers[row.player_id]
+                          ? `#${currentDrawNumbers[row.player_id]} `
+                          : ""}
                         {row.player_name}
                       </td>
 
@@ -596,11 +643,13 @@ export default function LeaderboardPage() {
             </>
           ) : (
             <>
-              <strong className="text-white">Qualification:</strong> Top 16
-              players after the preliminary rounds qualify for
-              best-of-3 Quarterfinals. With 12 players, the Top 8 go
-              straight to best-of-3 Semifinals. Pairing stays random
-              until the Final. Semifinal losers play for 3rd place.
+              <strong className="text-white">Qualification:</strong> Top{" "}
+              {advanceCount} of {playerCount} players advance.
+              {advanceCount === 16
+                ? " They play best-of-3 quarterfinals."
+                : " They go straight to best-of-3 semifinals."}{" "}
+              Pairing stays random until the Final. Semifinal losers
+              play for 3rd place.
             </>
           )}
         </div>

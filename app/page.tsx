@@ -4,7 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import AppNav from "@/app/components/AppNav";
 import {
+  generatePrelimSchedule,
   generateRandomPairings,
+  partnerCountsFromMatchPlayers,
+  scheduleRoundsForCourtContinuity,
   type Pairing,
 } from "../lib/tournamentEngine";
 import { deleteTournament } from "../lib/deleteTournament";
@@ -51,10 +54,19 @@ import {
 } from "../lib/splitPairsTournament";
 import { scrollToSection } from "../lib/scrollToSection";
 import CompletedMatches from "@/app/components/CompletedMatches";
+import PlayerNumberAssignment, {
+  type NumberAssignment,
+} from "@/app/components/PlayerNumberAssignment";
 import {
   loadCompletedMatches,
   type CompletedMatchView,
 } from "../lib/individualMatchEdit";
+import {
+  drawNumberMap,
+  drawPhaseForRound,
+  hasCompleteDraw,
+  type PlayerDrawNumber,
+} from "../lib/playerDraw";
 
 type Player = {
   id: string;
@@ -128,6 +140,13 @@ export default function HomePage() {
 
   const [currentRound, setCurrentRound] =
     useState<Round | null>(null);
+  const [rounds, setRounds] = useState<Round[]>([]);
+  const [roundSummaries, setRoundSummaries] = useState<
+    Record<string, { done: number; total: number }>
+  >({});
+  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(
+    null
+  );
 
   const [matches, setMatches] =
     useState<Match[]>([]);
@@ -140,6 +159,7 @@ export default function HomePage() {
 
   const [standings, setStandings] =
     useState<Standing[]>([]);
+  const [drawNumbers, setDrawNumbers] = useState<PlayerDrawNumber[]>([]);
 
   const [tournamentName, setTournamentName] =
     useState("");
@@ -285,7 +305,8 @@ export default function HomePage() {
    * Load tournament and current round.
    */
   async function loadTournamentData(
-    tournamentId: string
+    tournamentId: string,
+    preferredRoundId?: string | null
   ) {
     try {
       setLoading(true);
@@ -306,7 +327,10 @@ export default function HomePage() {
         setTournament(null);
         setPlayers([]);
         setStandings([]);
+        setDrawNumbers([]);
         setCurrentRound(null);
+        setRounds([]);
+        setRoundSummaries({});
         setMatches([]);
         setCompletedMatches([]);
         setMatchPlayers([]);
@@ -331,7 +355,10 @@ export default function HomePage() {
 
       if (tournamentData.format === "team_groups") {
         setStandings([]);
+        setDrawNumbers([]);
         setCurrentRound(null);
+        setRounds([]);
+        setRoundSummaries({});
         setMatches([]);
         setCompletedMatches([]);
         setMatchPlayers([]);
@@ -361,36 +388,100 @@ export default function HomePage() {
 
       setStandings(standingData || []);
 
+      if (
+        !tournamentData.format ||
+        tournamentData.format === "individual"
+      ) {
+        const { data: drawData, error: drawError } = await supabase
+          .from("player_draw_numbers")
+          .select("player_id,phase,draw_number")
+          .eq("tournament_id", tournamentId);
+
+        if (drawError) {
+          throw drawError;
+        }
+
+        setDrawNumbers((drawData || []) as PlayerDrawNumber[]);
+      } else {
+        setDrawNumbers([]);
+      }
+
       const { data: roundsData, error: roundsError } =
         await supabase
           .from("rounds")
           .select("*")
           .eq("tournament_id", tournamentId)
           .order("round_number", {
-            ascending: false,
-          })
-          .limit(1);
+            ascending: true,
+          });
 
       if (roundsError) {
         throw roundsError;
       }
 
-      if (!roundsData || roundsData.length === 0) {
+      const loadedRounds = (roundsData || []) as Round[];
+      setRounds(loadedRounds);
+
+      if (loadedRounds.length === 0) {
+        setSelectedRoundId(null);
         setCurrentRound(null);
+        setRoundSummaries({});
         setMatches([]);
         setMatchPlayers([]);
         return;
       }
 
-      const latestRound = roundsData[0];
+      const { data: summaryRows, error: summaryError } =
+        await supabase
+          .from("matches")
+          .select("round_id,status")
+          .in(
+            "round_id",
+            loadedRounds.map((round) => round.id)
+          );
 
-      setCurrentRound(latestRound);
+      if (summaryError) {
+        throw summaryError;
+      }
+
+      const summaries: Record<string, { done: number; total: number }> =
+        {};
+
+      (summaryRows || []).forEach((row) => {
+        const summary = summaries[row.round_id] || {
+          done: 0,
+          total: 0,
+        };
+
+        summary.total += 1;
+
+        if (row.status === "completed") {
+          summary.done += 1;
+        }
+
+        summaries[row.round_id] = summary;
+      });
+
+      setRoundSummaries(summaries);
+
+      const preferred =
+        preferredRoundId === undefined
+          ? selectedRoundId
+          : preferredRoundId;
+
+      const selectedRound =
+        loadedRounds.find((round) => round.id === preferred) ||
+        loadedRounds.find((round) => round.status !== "completed") ||
+        loadedRounds[loadedRounds.length - 1];
+
+      setSelectedRoundId(selectedRound.id);
+      setCurrentRound(selectedRound);
 
       const { data: matchData, error: matchError } =
         await supabase
           .from("matches")
           .select("*")
-          .eq("round_id", latestRound.id)
+          .eq("round_id", selectedRound.id)
           .order("match_number");
 
       if (matchError) {
@@ -476,25 +567,36 @@ export default function HomePage() {
       setLoading(true);
       setStatus("");
 
-      const names = getPlayerNames();
+      const enteredNames = getPlayerNames();
+      const names =
+        tournamentFormat === "individual"
+          ? Array.from(
+              { length: playerCount },
+              (_, index) => `Number ${index + 1}`
+            )
+          : enteredNames;
 
       if (!tournamentName.trim()) {
         setStatus("Please enter a tournament name.");
         return;
       }
 
-      if (names.length !== playerCount) {
+      if (
+        tournamentFormat !== "individual" &&
+        names.length !== playerCount
+      ) {
         setStatus(
           `Please enter exactly ${playerCount} player names. You entered ${names.length}.`
         );
         return;
       }
 
-      const uniqueNames = new Set(
-        names.map((name) => name.toLowerCase())
-      );
+      const uniqueNames = new Set(names.map((name) => name.toLowerCase()));
 
-      if (uniqueNames.size !== names.length) {
+      if (
+        tournamentFormat !== "individual" &&
+        uniqueNames.size !== names.length
+      ) {
         setStatus(
           "Player names must be unique."
         );
@@ -747,7 +849,9 @@ export default function HomePage() {
   async function createRound(
     roundNumber: number,
     roundType: string,
-    pairings: Pairing[]
+    pairings: Pairing[],
+    reload = true,
+    preferredRoundId?: string | null
   ) {
     if (!tournament) {
       throw new Error(
@@ -852,23 +956,168 @@ export default function HomePage() {
       })
       .eq("id", tournament.id);
 
-    await loadTournamentData(
-      tournament.id
+    if (reload) {
+      await loadTournamentData(
+        tournament.id,
+        preferredRoundId
+      );
+    }
+  }
+
+  function numberedEnginePlayers(phase: "preliminary" | "knockout") {
+    const numbers = drawNumberMap(drawNumbers, phase);
+
+    return [...players]
+      .filter((player) => numbers.has(player.id))
+      .sort(
+        (a, b) =>
+          Number(numbers.get(a.id)) - Number(numbers.get(b.id))
+      )
+      .map((player) => ({
+        id: player.id,
+        name: `Number ${numbers.get(player.id)}`,
+      }));
+  }
+
+  async function saveNumberDraw(
+    phase: "preliminary" | "knockout",
+    assignments: NumberAssignment[]
+  ) {
+    if (!tournament) {
+      throw new Error("No active tournament.");
+    }
+
+    if (phase === "preliminary") {
+      for (const assignment of assignments) {
+        const { error } = await supabase
+          .from("players")
+          .update({ name: assignment.name })
+          .eq("id", assignment.playerId)
+          .eq("tournament_id", tournament.id);
+
+        if (error) {
+          throw error;
+        }
+      }
+    }
+
+    const { error: deleteError } = await supabase
+      .from("player_draw_numbers")
+      .delete()
+      .eq("tournament_id", tournament.id)
+      .eq("phase", phase);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+
+    const { error: insertError } = await supabase
+      .from("player_draw_numbers")
+      .insert(
+        assignments.map((assignment) => ({
+          tournament_id: tournament.id,
+          player_id: assignment.playerId,
+          phase,
+          draw_number: assignment.drawNumber,
+        }))
+      );
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    setStatus(
+      phase === "preliminary"
+        ? "Preliminary chit numbers saved. You can generate all rounds."
+        : "Knockout chit numbers saved. You can generate the bracket."
     );
+    await loadTournamentData(tournament.id);
+  }
+
+  async function existingPartnerCounts() {
+    const prelimIds = rounds
+      .filter((round) => round.round_type === "preliminary")
+      .map((round) => round.id);
+
+    if (prelimIds.length === 0) {
+      return new Map<string, number>();
+    }
+
+    const { data: matchRows, error: matchError } = await supabase
+      .from("matches")
+      .select("id")
+      .in("round_id", prelimIds);
+
+    if (matchError) {
+      throw matchError;
+    }
+
+    const matchIds = (matchRows || []).map((match) => match.id);
+
+    if (matchIds.length === 0) {
+      return new Map<string, number>();
+    }
+
+    const { data: rows, error } = await supabase
+      .from("match_players")
+      .select("match_id,player_id,team_number")
+      .in("match_id", matchIds);
+
+    if (error) {
+      throw error;
+    }
+
+    return partnerCountsFromMatchPlayers(rows || []);
+  }
+
+  async function createPrelimSchedule(
+    roundCount: number,
+    firstRoundNumber: number
+  ) {
+    if (!tournament) {
+      return;
+    }
+
+    const numberedPlayers = numberedEnginePlayers("preliminary");
+
+    if (numberedPlayers.length !== tournament.total_players) {
+      throw new Error(
+        `Assign all ${tournament.total_players} preliminary chit numbers first.`
+      );
+    }
+
+    const schedule = scheduleRoundsForCourtContinuity(
+      generatePrelimSchedule(
+        numberedPlayers,
+        roundCount,
+        {
+          partnerCounts: await existingPartnerCounts(),
+        }
+      ),
+      tournament.courts
+    );
+
+    for (let index = 0; index < schedule.length; index += 1) {
+      await createRound(
+        firstRoundNumber + index,
+        "preliminary",
+        schedule[index],
+        index === schedule.length - 1
+      );
+    }
   }
 
   /*
-   * Generate Round 1.
-   * test 
+   * Draw every preliminary round before play starts.
    */
   async function generateRoundOne() {
     if (!tournament) {
       return;
     }
 
-    if (currentRound) {
+    if (currentRound || rounds.length > 0) {
       setStatus(
-        `Round ${currentRound.round_number} already exists.`
+        "Preliminary rounds already exist."
       );
       return;
     }
@@ -877,32 +1126,67 @@ export default function HomePage() {
       setLoading(true);
       setStatus("");
 
-      const pairings = await generateRandomPairings(
-        players.map((player) => ({
-          id: player.id,
-          name: player.name,
-        }))
-      );
-
-      await createRound(
-        1,
-        "preliminary",
-        pairings
+      await createPrelimSchedule(
+        tournament.preliminary_rounds,
+        1
       );
 
       setStatus(
-        "Round 1 generated successfully."
+        `All ${tournament.preliminary_rounds} preliminary rounds are ready. Each partnership is used at most twice.`
       );
     } catch (error) {
       console.error(error);
 
       setStatus(
-        error instanceof Error
-          ? error.message
-          : "Unable to generate Round 1."
+        describeError(
+          error,
+          "Unable to generate the preliminary rounds."
+        )
       );
+
+      await loadTournamentData(tournament.id);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function generateRemainingPrelims() {
+    if (!tournament) {
+      return;
+    }
+
+    const existing = rounds.filter(
+      (round) => round.round_type === "preliminary"
+    ).length;
+    const remaining = tournament.preliminary_rounds - existing;
+
+    if (remaining <= 0) {
+      setStatus("Every preliminary round is already created.");
+      return;
+    }
+
+    try {
+      setGeneratingNextRound(true);
+      setStatus("");
+
+      await createPrelimSchedule(remaining, existing + 1);
+
+      setStatus(
+        `Rounds ${existing + 1}–${tournament.preliminary_rounds} are ready. Each partnership is used at most twice.`
+      );
+    } catch (error) {
+      console.error(error);
+
+      setStatus(
+        describeError(
+          error,
+          "Unable to generate the remaining rounds."
+        )
+      );
+
+      await loadTournamentData(tournament.id);
+    } finally {
+      setGeneratingNextRound(false);
     }
   }
 
@@ -1132,43 +1416,25 @@ export default function HomePage() {
       setStatus("");
 
       /*
-       * PRELIMINARY -> PRELIMINARY
+       * ALL PRELIMS COMPLETE -> KNOCKOUT OR FIXED PAIRS
        */
-      if (
-        currentRound.round_type ===
-          "preliminary" &&
-        currentRound.round_number <
-          tournament.preliminary_rounds
-      ) {
-        const pairings = await generateRandomPairings(
-          players.map((player) => ({
-            id: player.id,
-            name: player.name,
-          }))
+      if (currentRound.round_type === "preliminary") {
+        const prelims = rounds.filter(
+          (round) => round.round_type === "preliminary"
         );
+        const prelimsReady =
+          prelims.length >= tournament.preliminary_rounds &&
+          prelims.every((round) => round.status === "completed");
 
-        await createRound(
-          currentRound.round_number + 1,
-          "preliminary",
-          pairings
-        );
-
-        setStatus(
-          `Round ${currentRound.round_number + 1} generated with full random pairing.`
-        );
-
-        return;
+        if (!prelimsReady) {
+          setStatus(
+            "Finish every preliminary round before the next stage."
+          );
+          return;
+        }
       }
 
-      /*
-       * FINAL PRELIMINARY -> QUARTERFINALS
-       */
-      if (
-        currentRound.round_type ===
-          "preliminary" &&
-        currentRound.round_number ===
-          tournament.preliminary_rounds
-      ) {
+      if (currentRound.round_type === "preliminary") {
         if (tournament.format === "split_pairs") {
           await createSplitPairsFromStandings();
           return;
@@ -1187,18 +1453,41 @@ export default function HomePage() {
           );
         }
 
+        const knockoutNumbers = drawNumberMap(
+          drawNumbers,
+          "knockout"
+        );
+
+        if (
+          qualifiers.some(
+            (player) => !knockoutNumbers.has(player.id)
+          )
+        ) {
+          throw new Error(
+            `Assign fresh knockout numbers 1–${qualifierCount} before generating the ${stageLabel}.`
+          );
+        }
+
         const pairings =
           await generateRandomPairings(
-            qualifiers.map((player) => ({
-              id: player.id,
-              name: player.name,
-            }))
+            [...qualifiers]
+              .sort(
+                (a, b) =>
+                  Number(knockoutNumbers.get(a.id)) -
+                  Number(knockoutNumbers.get(b.id))
+              )
+              .map((player) => ({
+                id: player.id,
+                name: `Number ${knockoutNumbers.get(player.id)}`,
+              }))
           );
 
         await createRound(
-          currentRound.round_number + 1,
+          tournament.preliminary_rounds + 1,
           nextStage,
-          pairings
+          pairings,
+          true,
+          null
         );
 
         setStatus(
@@ -1271,7 +1560,9 @@ export default function HomePage() {
         await createRound(
           currentRound.round_number + 1,
           "semifinal",
-          pairings
+          pairings,
+          true,
+          null
         );
 
         setStatus(
@@ -1338,7 +1629,9 @@ export default function HomePage() {
         await createRound(
           currentRound.round_number + 1,
           "final",
-          pairings
+          pairings,
+          true,
+          null
         );
 
         setStatus(
@@ -1500,15 +1793,8 @@ export default function HomePage() {
         winnerTeam = team1Score > team2Score ? 1 : 2;
         const winningScore = Math.max(team1Score, team2Score);
         const losingScore = Math.min(team1Score, team2Score);
-        const fullPrelimScore =
-          currentRound?.round_type === "preliminary";
-
-        winnerPoints = fullPrelimScore
-          ? winningScore
-          : winningScore / 2;
-        loserPoints = fullPrelimScore
-          ? losingScore
-          : losingScore / 2;
+        winnerPoints = winningScore / 2;
+        loserPoints = losingScore / 2;
       }
 
       if (match.status === "completed") {
@@ -1882,6 +2168,13 @@ export default function HomePage() {
       );
   }
 
+  function playerDrawLabel(player: Player) {
+    const phase = drawPhaseForRound(currentRound?.round_type);
+    const number = drawNumberMap(drawNumbers, phase).get(player.id);
+
+    return number ? `#${number} ${player.name}` : player.name;
+  }
+
   const matchesByCourt =
     useMemo(() => {
       const grouped =
@@ -1939,35 +2232,59 @@ export default function HomePage() {
     );
   }
 
+  function preliminaryRoundList() {
+    return rounds.filter(
+      (round) => round.round_type === "preliminary"
+    );
+  }
+
+  function allPrelimRoundsExist() {
+    return (
+      (tournament?.preliminary_rounds || 0) > 0 &&
+      preliminaryRoundList().length >=
+        (tournament?.preliminary_rounds || 0)
+    );
+  }
+
+  function allPrelimRoundsComplete() {
+    const list = preliminaryRoundList();
+
+    return (
+      allPrelimRoundsExist() &&
+      list.every((round) => round.status === "completed")
+    );
+  }
+
+  function roundTabLabel(round: Round) {
+    if (round.round_type === "preliminary") {
+      return `Round ${round.round_number}`;
+    }
+
+    if (round.round_type === "quarterfinal") {
+      return "Quarterfinals";
+    }
+
+    if (round.round_type === "semifinal") {
+      return "Semifinals";
+    }
+
+    if (round.round_type === "final") {
+      return "Final";
+    }
+
+    return `Round ${round.round_number}`;
+  }
+
   function getNextRoundButtonText() {
     if (!currentRound) {
       return "";
     }
 
-    if (
-      currentRound.round_type ===
-        "preliminary" &&
-      currentRound.round_number <
-        (tournament?.preliminary_rounds ||
-          0)
-    ) {
-      if (tournament?.format === "split_pairs") {
-        return `Generate Random Round ${
-          currentRound.round_number + 1
-        }`;
+    if (currentRound.round_type === "preliminary") {
+      if (!allPrelimRoundsComplete()) {
+        return "";
       }
 
-      return `Generate Round ${
-        currentRound.round_number + 1
-      } — Full Random Pairing`;
-    }
-
-    if (
-      currentRound.round_type ===
-        "preliminary" &&
-      currentRound.round_number ===
-        tournament?.preliminary_rounds
-    ) {
       if (tournament?.format === "split_pairs") {
         return "Create Fixed Pairs";
       }
@@ -2403,9 +2720,9 @@ export default function HomePage() {
             {tournamentFormat === "individual" && (
               <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm leading-6 text-slate-300">
                 Pairings are fully random in every round until the
-                Final. After prelims, the Top 16 play best-of-3
-                quarterfinals, semifinals, and final. With 12
-                players, the Top 8 go straight to best-of-3
+                Final. With more than 18 players, including 24,
+                the Top 16 play best-of-3 quarterfinals. With 12
+                or 16 players, the Top 8 go straight to best-of-3
                 semifinals. The Final keeps the two semifinal
                 winning pairs together, and the two losing pairs
                 play for 3rd place.
@@ -2436,6 +2753,14 @@ export default function HomePage() {
               </div>
             )}
 
+            {tournamentFormat === "individual" ? (
+              <div className="mt-7 rounded-xl border border-amber-800 bg-amber-950/20 p-4 text-sm leading-6 text-slate-300">
+                Create the {playerCount} numbered slots first. At the start of
+                the prelims, players pick chits and you enter each name
+                against numbers 1–{playerCount}.
+              </div>
+            ) : (
+            <>
             <div className="mt-7 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
               <button
                 onClick={() =>
@@ -2524,6 +2849,8 @@ export default function HomePage() {
                   players.
                 </p>
               </div>
+            )}
+            </>
             )}
 
             <div className="mt-8 grid gap-3 sm:flex sm:flex-wrap">
@@ -2768,6 +3095,32 @@ export default function HomePage() {
       )
     : [];
 
+  const prelimDrawReady =
+    tournament.format !== "individual" ||
+    hasCompleteDraw(
+      drawNumbers,
+      "preliminary",
+      tournament.total_players
+    );
+  const knockoutDrawCount = knockoutQualifierCount();
+  const knockoutQualifiers =
+    tournament.format === "individual" ? getTop16() : [];
+  const knockoutDrawReady =
+    tournament.format !== "individual" ||
+    hasCompleteDraw(
+      drawNumbers,
+      "knockout",
+      knockoutDrawCount
+    );
+  const knockoutStageExists = rounds.some(
+    (round) => round.round_type !== "preliminary"
+  );
+  const needsKnockoutDraw =
+    tournament.format === "individual" &&
+    allPrelimRoundsComplete() &&
+    !knockoutStageExists &&
+    !knockoutDrawReady;
+
   /*
    * DASHBOARD
    */
@@ -2899,6 +3252,32 @@ export default function HomePage() {
           </div>
         </section>
 
+        {!currentRound &&
+          tournament.format === "individual" &&
+          !prelimDrawReady && (
+            <div className="mb-8">
+              <PlayerNumberAssignment
+                phase="preliminary"
+                players={players}
+                onSave={(assignments) =>
+                  saveNumberDraw("preliminary", assignments)
+                }
+              />
+            </div>
+          )}
+
+        {needsKnockoutDraw && (
+          <div id="next-round" className="mb-8 scroll-mt-4">
+            <PlayerNumberAssignment
+              phase="knockout"
+              players={knockoutQualifiers}
+              onSave={(assignments) =>
+                saveNumberDraw("knockout", assignments)
+              }
+            />
+          </div>
+        )}
+
         <section className="mb-6 sm:mb-8">
           <div className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-500">
             Quick Links
@@ -2994,15 +3373,17 @@ export default function HomePage() {
           </div>
         )}
 
-        {!currentRound ? (
+        {!currentRound && prelimDrawReady ? (
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-8">
             <h2 className="text-2xl font-bold">
               Ready to Start
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-slate-400 sm:text-base">
-              Round 1 will randomly pair all
-              players using a hash of each name.
+              All {tournament.preliminary_rounds} preliminary
+              rounds are drawn now. Players are shuffled with a
+              fresh random draw, and the same two players partner
+              at most twice.
             </p>
 
             <button
@@ -3012,11 +3393,50 @@ export default function HomePage() {
             >
               {loading
                 ? "Generating..."
-                : "🎲 Generate Round 1"}
+                : `🎲 Generate all ${tournament.preliminary_rounds} rounds`}
             </button>
           </div>
-        ) : (
+        ) : currentRound ? (
           <>
+            {rounds.length > 1 && (
+              <div className="mb-6 flex gap-2 overflow-x-auto rounded-xl border border-slate-800 bg-slate-900 p-2">
+                {rounds.map((round) => {
+                  const summary = roundSummaries[round.id];
+                  const active = round.id === currentRound.id;
+
+                  return (
+                    <button
+                      key={round.id}
+                      type="button"
+                      onClick={() => {
+                        loadTournamentData(tournament.id, round.id);
+                      }}
+                      className={`min-h-14 min-w-[7.5rem] shrink-0 rounded-lg px-3 py-2 text-left transition ${
+                        active
+                          ? "bg-emerald-600 text-white"
+                          : "text-slate-300 hover:bg-slate-800"
+                      }`}
+                    >
+                      <span className="block text-sm font-black">
+                        {roundTabLabel(round)}
+                      </span>
+                      <span
+                        className={`mt-1 block text-xs font-semibold ${
+                          active ? "text-emerald-100" : "text-slate-500"
+                        }`}
+                      >
+                        {summary
+                          ? `${summary.done}/${summary.total} played`
+                          : round.status === "completed"
+                            ? "Complete"
+                            : "Open"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             <div className="mb-6 rounded-xl border border-slate-800 bg-slate-900 p-4 sm:mb-8 sm:p-5">
               <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -3178,7 +3598,7 @@ export default function HomePage() {
                                         className="break-words text-sm leading-6 text-slate-200"
                                       >
                                         {
-                                          player.name
+                                          playerDrawLabel(player)
                                         }
                                       </p>
                                     )
@@ -3229,7 +3649,7 @@ export default function HomePage() {
                                         className="break-words text-sm leading-6 text-slate-200"
                                       >
                                         {
-                                          player.name
+                                          playerDrawLabel(player)
                                         }
                                       </p>
                                     )
@@ -3325,7 +3745,46 @@ export default function HomePage() {
               />
             )}
 
-            {isCurrentRoundComplete() &&
+            {currentRound.round_type === "preliminary" &&
+              !allPrelimRoundsExist() && (
+                <div
+                  id="next-round"
+                  className="mt-8 scroll-mt-4 rounded-2xl border border-emerald-800 bg-emerald-950/30 p-5 sm:p-6"
+                >
+                  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                      <h2 className="text-xl font-bold text-emerald-400 sm:text-2xl">
+                        Draw the rest of the prelims
+                      </h2>
+
+                      <p className="mt-2 text-sm leading-6 text-slate-300 sm:text-base">
+                        {preliminaryRoundList().length} of{" "}
+                        {tournament.preliminary_rounds} rounds exist.
+                        The remaining rounds can run alongside the
+                        ones already open. Partnerships still stop at
+                        two.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={generateRemainingPrelims}
+                      disabled={generatingNextRound}
+                      className="min-h-12 w-full rounded-lg bg-emerald-600 px-6 py-3 font-bold hover:bg-emerald-500 disabled:opacity-50 lg:w-auto lg:shrink-0"
+                    >
+                      {generatingNextRound
+                        ? "Generating..."
+                        : `Generate rounds ${preliminaryRoundList().length + 1}–${tournament.preliminary_rounds}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+            {((currentRound.round_type === "preliminary" &&
+              allPrelimRoundsComplete() &&
+              (tournament.format !== "individual" ||
+                knockoutDrawReady)) ||
+              (currentRound.round_type !== "preliminary" &&
+                isCurrentRoundComplete())) &&
               currentRound.round_type !==
                 "final" && (
                 <div
@@ -3490,7 +3949,7 @@ export default function HomePage() {
               </div>
             )}
           </>
-        )}
+        ) : null}
       </div>
     </main>
   );

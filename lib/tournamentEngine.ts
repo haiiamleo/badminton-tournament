@@ -280,6 +280,367 @@ async function shuffleByPlayerHash<T extends { id: string; name: string }>(
   return ranked.map((entry) => entry.item);
 }
 
+export const MAX_PARTNER_REPEATS = 2;
+
+export type PartnerCountRow = {
+  match_id: string;
+  player_id: string;
+  team_number: number;
+};
+
+function randomIndex(limit: number) {
+  if (limit <= 1) {
+    return 0;
+  }
+
+  const max = 0x100000000;
+  const cutoff = max - (max % limit);
+  const buffer = new Uint32Array(1);
+  let value = cutoff;
+
+  while (value >= cutoff) {
+    crypto.getRandomValues(buffer);
+    value = buffer[0];
+  }
+
+  return value % limit;
+}
+
+function shufflePlayers<T>(items: T[]) {
+  const result = [...items];
+
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swap = randomIndex(index + 1);
+    [result[index], result[swap]] = [result[swap], result[index]];
+  }
+
+  return result;
+}
+
+export function partnerCountsFromMatchPlayers(rows: PartnerCountRow[]) {
+  const counts = new Map<string, number>();
+  const matches = new Map<string, PartnerCountRow[]>();
+
+  rows.forEach((row) => {
+    const players = matches.get(row.match_id) || [];
+    players.push(row);
+    matches.set(row.match_id, players);
+  });
+
+  matches.forEach((players) => {
+    [1, 2].forEach((teamNumber) => {
+      const team = players
+        .filter((player) => player.team_number === teamNumber)
+        .map((player) => player.player_id);
+
+      if (team.length === 2) {
+        const key = pairKey(team[0], team[1]);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    });
+  });
+
+  return counts;
+}
+
+const PARTNER_SPLITS = [
+  [0, 1, 2, 3],
+  [0, 2, 1, 3],
+  [0, 3, 1, 2],
+] as const;
+
+function buildConstrainedRound(
+  players: EnginePlayer[],
+  partnerCounts: Map<string, number>,
+  maxPartnerRepeats: number
+) {
+  const ordered = shufflePlayers(players);
+  const pairings: Pairing[] = [];
+
+  for (let index = 0; index < ordered.length; index += 4) {
+    const group = ordered.slice(index, index + 4).map((player) => player.id);
+    const validSplits = PARTNER_SPLITS.filter((split) => {
+      const first = partnerCounts.get(pairKey(group[split[0]], group[split[1]])) || 0;
+      const second = partnerCounts.get(pairKey(group[split[2]], group[split[3]])) || 0;
+
+      return first < maxPartnerRepeats && second < maxPartnerRepeats;
+    });
+
+    if (validSplits.length === 0) {
+      return null;
+    }
+
+    const lowest = Math.min(
+      ...validSplits.map((split) => {
+        const first = partnerCounts.get(pairKey(group[split[0]], group[split[1]])) || 0;
+        const second = partnerCounts.get(pairKey(group[split[2]], group[split[3]])) || 0;
+
+        return first + second;
+      })
+    );
+    const preferred = validSplits.filter((split) => {
+      const first = partnerCounts.get(pairKey(group[split[0]], group[split[1]])) || 0;
+      const second = partnerCounts.get(pairKey(group[split[2]], group[split[3]])) || 0;
+
+      return first + second === lowest;
+    });
+    const split = preferred[randomIndex(preferred.length)];
+    const team1 = shufflePlayers([group[split[0]], group[split[1]]]);
+    const team2 = shufflePlayers([group[split[2]], group[split[3]]]);
+    const teams = shufflePlayers([team1, team2]);
+
+    pairings.push({
+      team1: teams[0],
+      team2: teams[1],
+    });
+  }
+
+  return shufflePlayers(pairings);
+}
+
+function rememberPairings(
+  partnerCounts: Map<string, number>,
+  pairings: Pairing[]
+) {
+  pairings.forEach((pairing) => {
+    [pairing.team1, pairing.team2].forEach((team) => {
+      if (team.length === 2) {
+        const key = pairKey(team[0], team[1]);
+        partnerCounts.set(key, (partnerCounts.get(key) || 0) + 1);
+      }
+    });
+  });
+}
+
+/*
+ * Build every preliminary round before play starts.
+ * A fresh CSPRNG shuffle is used for every attempt. Any two players
+ * may partner at most `maxPartnerRepeats` times across the schedule.
+ */
+export function generatePrelimSchedule(
+  players: EnginePlayer[],
+  roundCount: number,
+  options?: {
+    maxPartnerRepeats?: number;
+    partnerCounts?: Map<string, number>;
+  }
+) {
+  if (players.length % 4 !== 0) {
+    throw new Error(
+      `Player count must be divisible by 4. Received ${players.length}.`
+    );
+  }
+
+  if (roundCount < 1) {
+    throw new Error("At least one preliminary round is required.");
+  }
+
+  const maxPartnerRepeats = options?.maxPartnerRepeats ?? MAX_PARTNER_REPEATS;
+  const partnerCapacity = maxPartnerRepeats * (players.length - 1);
+
+  if (roundCount > partnerCapacity) {
+    throw new Error(
+      `${players.length} players cannot play ${roundCount} rounds without a partnership repeating more than ${maxPartnerRepeats} times.`
+    );
+  }
+
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const partnerCounts = new Map(options?.partnerCounts || []);
+    const rounds: Pairing[][] = [];
+    let built = true;
+
+    for (let round = 0; round < roundCount; round += 1) {
+      let pairings: Pairing[] | null = null;
+
+      for (let tryRound = 0; tryRound < 60; tryRound += 1) {
+        pairings = buildConstrainedRound(
+          players,
+          partnerCounts,
+          maxPartnerRepeats
+        );
+
+        if (pairings) {
+          break;
+        }
+      }
+
+      if (!pairings) {
+        built = false;
+        break;
+      }
+
+      rememberPairings(partnerCounts, pairings);
+      rounds.push(pairings);
+    }
+
+    if (built) {
+      const overCap = [...partnerCounts.values()].some(
+        (count) => count > maxPartnerRepeats
+      );
+
+      if (!overCap) {
+        return rounds;
+      }
+    }
+  }
+
+  throw new Error(
+    "Could not build a draw where every partnership is used at most twice. Generate the rounds again."
+  );
+}
+
+type CourtSlot = {
+  court: number;
+  position: number;
+  isLast: boolean;
+};
+
+function courtSlots(matchCount: number, courtCount: number): CourtSlot[] {
+  const matchesPerCourt = Math.ceil(matchCount / courtCount);
+
+  return Array.from({ length: matchCount }, (_, index) => {
+    const court = Math.min(
+      courtCount,
+      Math.floor(index / matchesPerCourt) + 1
+    );
+    const firstIndex = (court - 1) * matchesPerCourt;
+    const finalIndex = Math.min(
+      firstIndex + matchesPerCourt,
+      matchCount
+    ) - 1;
+
+    return {
+      court,
+      position: index - firstIndex,
+      isLast: index === finalIndex,
+    };
+  });
+}
+
+function pairingPlayers(pairing: Pairing) {
+  return [...pairing.team1, ...pairing.team2];
+}
+
+/*
+ * Reorder each round so the existing court assignment keeps as many
+ * players as possible on the court they just used. A large bonus is
+ * given when at least two players from one match stay together, and
+ * when the last match on a court flows into that court's first match
+ * in the next round.
+ */
+export function scheduleRoundsForCourtContinuity(
+  rounds: Pairing[][],
+  courtCount: number
+) {
+  if (rounds.length < 2 || courtCount < 1) {
+    return rounds.map((round) => [...round]);
+  }
+
+  const scheduled: Pairing[][] = [[...rounds[0]]];
+
+  for (let roundIndex = 1; roundIndex < rounds.length; roundIndex += 1) {
+    const previous = scheduled[roundIndex - 1];
+    const current = rounds[roundIndex];
+    const previousSlots = courtSlots(previous.length, courtCount);
+    const currentSlots = courtSlots(current.length, courtCount);
+    const previousPlayer = new Map<
+      string,
+      { court: number; match: number; wasLast: boolean }
+    >();
+
+    previous.forEach((pairing, match) => {
+      pairingPlayers(pairing).forEach((playerId) => {
+        previousPlayer.set(playerId, {
+          court: previousSlots[match].court,
+          match,
+          wasLast: previousSlots[match].isLast,
+        });
+      });
+    });
+
+    const placementScore = (pairing: Pairing, slot: CourtSlot) => {
+      const players = pairingPlayers(pairing)
+        .map((playerId) => previousPlayer.get(playerId))
+        .filter(
+          (
+            value
+          ): value is {
+            court: number;
+            match: number;
+            wasLast: boolean;
+          } => Boolean(value)
+        );
+      const onSameCourt = players.filter(
+        (player) => player.court === slot.court
+      );
+      const previousMatches = new Map<number, number>();
+
+      onSameCourt.forEach((player) => {
+        previousMatches.set(
+          player.match,
+          (previousMatches.get(player.match) || 0) + 1
+        );
+      });
+
+      const stayTogether = Math.max(
+        0,
+        ...previousMatches.values()
+      );
+      const continuousPlayers =
+        slot.position === 0
+          ? onSameCourt.filter((player) => player.wasLast).length
+          : 0;
+
+      return (
+        onSameCourt.length * 10 +
+        (stayTogether >= 2 ? stayTogether * 30 : 0) +
+        continuousPlayers * 50
+      );
+    };
+
+    let best: Pairing[] | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const candidate: Array<Pairing | undefined> = Array(
+        current.length
+      );
+      const availableSlots = currentSlots.map((_, index) => index);
+      let total = 0;
+
+      for (const pairing of shufflePlayers(current)) {
+        const scores = availableSlots.map((slotIndex) => ({
+          slotIndex,
+          score: placementScore(pairing, currentSlots[slotIndex]),
+        }));
+        const highest = Math.max(...scores.map((item) => item.score));
+        const preferred = scores.filter(
+          (item) => item.score === highest
+        );
+        const chosen = preferred[randomIndex(preferred.length)];
+
+        candidate[chosen.slotIndex] = pairing;
+        total += chosen.score;
+        availableSlots.splice(
+          availableSlots.indexOf(chosen.slotIndex),
+          1
+        );
+      }
+
+      if (total > bestScore) {
+        bestScore = total;
+        best = candidate.filter(
+          (pairing): pairing is Pairing => Boolean(pairing)
+        );
+      }
+    }
+
+    scheduled.push(best || [...current]);
+  }
+
+  return scheduled;
+}
+
 export async function generateRandomPairings(
   players: EnginePlayer[]
 ): Promise<Pairing[]> {

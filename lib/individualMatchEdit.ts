@@ -49,13 +49,10 @@ function sidePoints(input: {
   team2Rally: number;
   winnerTeam: 1 | 2;
 }): { team1: SidePoints; team2: SidePoints } {
-  const prelim = input.roundType === "preliminary";
-  const winnerPoints = prelim
-    ? Math.max(input.team1Score, input.team2Score)
-    : (input.winnerTeam === 1 ? input.team1Rally : input.team2Rally) / 2;
-  const loserPoints = prelim
-    ? Math.min(input.team1Score, input.team2Score)
-    : (input.winnerTeam === 1 ? input.team2Rally : input.team1Rally) / 2;
+  const winnerPoints =
+    (input.winnerTeam === 1 ? input.team1Rally : input.team2Rally) / 2;
+  const loserPoints =
+    (input.winnerTeam === 1 ? input.team2Rally : input.team1Rally) / 2;
 
   const side = (isWinner: boolean): SidePoints => ({
     pointsFor: isWinner ? winnerPoints : loserPoints,

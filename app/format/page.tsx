@@ -121,7 +121,7 @@ const teamSteps: DiagramStep[] = [
 ];
 
 function individualTotal(players: number, prelimRounds: number) {
-  const knockoutMatches = players >= 16 ? 8 : 4;
+  const knockoutMatches = players > 18 ? 8 : 4;
 
   return (players / 4) * prelimRounds + knockoutMatches;
 }
@@ -281,9 +281,9 @@ export default function TournamentFormatPage() {
                 match is doubles: two players versus two players.
                 Enter any player count from 12 to 64 that is
                 divisible by 4, such as 12, 16, 20, 24, or 32.
-                With 16 or more players, the Top 16 go to the
-                quarterfinals. With 12 players, the Top 8 go
-                straight to the semifinals.
+                With more than 18 players, such as 20 or 24, the
+                Top 16 go to the quarterfinals. With 12 or 16
+                players, the Top 8 go straight to the semifinals.
               </p>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -326,10 +326,15 @@ export default function TournamentFormatPage() {
                     1. Preliminary rounds
                   </strong>
                   <div className="mt-1">
-                    Everyone plays. Type the number of preliminary
-                    rounds, from 1 to 12. Every prelim round uses
-                    full random pairing, with no ranking bias and no
-                    attempt to avoid repeat partners.
+                    Players pick numbered chits and names are entered
+                    against those numbers. Type 1 to 12 preliminary
+                    rounds. All rounds are drawn from the numbers
+                    before play starts, so courts can run them in
+                    parallel. The same two players can partner at most
+                    twice. The match order also favors keeping two
+                    players from one match on the same court for their
+                    next round, with the next game placed immediately
+                    after the previous one where possible.
                   </div>
                 </li>
                 <li>
@@ -337,10 +342,13 @@ export default function TournamentFormatPage() {
                     2. Quarterfinals
                   </strong>
                   <div className="mt-1">
-                    The Top 16 players qualify. They are paired
-                    at random into 4 doubles matches. Each match
-                    is best of 3 games. A 12-player event skips
-                    this stage.
+                    When the field is larger than 18, the Top 16
+                    qualify. They pick fresh knockout chits numbered
+                    1–16, while their prelim scores remain attached
+                    to their names. A 24-player event uses this stage.
+                    The numbers are paired at random into 4 doubles
+                    matches. Each match is best of 3 games. Fields of
+                    12 or 16 players skip this stage.
                   </div>
                 </li>
                 <li>
@@ -350,8 +358,8 @@ export default function TournamentFormatPage() {
                   <div className="mt-1">
                     The 8 quarterfinal winners are paired at
                     random into 2 doubles matches. Each match is
-                    best of 3 games. In a 12-player event, the
-                    Top 8 from the prelims play here instead.
+                    best of 3 games. In a 12- or 16-player event,
+                    the Top 8 from the prelims play here instead.
                   </div>
                 </li>
                 <li>
@@ -372,42 +380,32 @@ export default function TournamentFormatPage() {
                 Full random pairing
               </h2>
               <p className="mt-3 text-sm leading-6 text-slate-300">
-                Individual doubles uses full random pairing. Every
-                draw until the Final is built the same way: a
-                cryptographic hash of each player, then a sort.
+                Preliminary rounds are drawn together before the first
+                match. Each round is a fresh random shuffle. Any two
+                players may partner at most twice across those rounds.
+                Quarterfinals and semifinals are shuffled again among
+                the qualifiers.
               </p>
               <ol className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
                 <li>
-                  <strong className="text-white">1. Fresh salt.</strong>{" "}
-                  The app creates a 16-byte random value so the same
-                  names do not produce the same draw twice.
+                  <strong className="text-white">1. Shuffle.</strong>{" "}
+                  Names and list order are ignored. A fresh random
+                  shuffle builds each round.
                 </li>
                 <li>
-                  <strong className="text-white">2. Hash each player.</strong>{" "}
-                  For every player it computes SHA-256 of{" "}
-                  <code className="rounded bg-slate-950 px-1.5 py-0.5 text-emerald-300">
-                    salt:playerId:playerName
-                  </code>
-                  . SHA-256 mixes the id and name evenly, so the
-                  original list order cannot leak into the draw.
+                  <strong className="text-white">2. Cap partnerships.</strong>{" "}
+                  The same two players can be partners at most twice
+                  across the preliminary rounds.
                 </li>
                 <li>
-                  <strong className="text-white">3. Sort by hash.</strong>{" "}
-                  Players are ordered by that hex digest. If two
-                  hashes ever matched, player id is the tie-break.
-                </li>
-                <li>
-                  <strong className="text-white">4. Group into matches.</strong>{" "}
-                  Consecutive groups of four become a match:
-                  positions 1-2 versus 3-4, then 5-6 versus 7-8,
-                  and so on.
+                  <strong className="text-white">3. Open every round.</strong>{" "}
+                  All preliminary rounds appear as tabs, so scoring
+                  can happen on more than one round at the same time.
                 </li>
               </ol>
               <p className="mt-4 text-sm leading-6 text-slate-400">
-                That hash shuffle is used for every preliminary
-                round, the quarterfinals, and the semifinals. The
-                final and 3rd place do not re-hash: each semifinal
-                pair stays together.
+                The final and 3rd place do not shuffle again: each
+                semifinal pair stays together.
               </p>
             </section>
 
@@ -420,7 +418,7 @@ export default function TournamentFormatPage() {
                 { label: "Final", count: 1 },
               ]}
               total={individualTotal(24, 6)}
-              note="Usual setup is 24 players and 6 prelims: 44 matches. With 16 or more players, the knockout is 8 matches. With 12 players, it is 4 matches: 2 semifinals, 3rd place, and the final. Every knockout match is best of 3 games. Each prelim round is players ÷ 4 matches, so 12 players is 3 a round and 32 players is 8 a round."
+              note="Usual setup is 24 players and 6 prelims: 44 matches. With more than 18 players, the knockout is 8 matches. With 12 or 16 players, it is 4 matches: 2 semifinals, 3rd place, and the final. Every knockout match is best of 3 games. Each prelim round is players ÷ 4 matches, so 12 players is 3 a round and 32 players is 8 a round."
             />
 
             <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
@@ -474,9 +472,10 @@ export default function TournamentFormatPage() {
             <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
               <h2 className="text-xl font-black">Scoring</h2>
               <p className="mt-3 text-sm leading-6 text-slate-300">
-                In the prelims, both players on a team earn that
-                team&apos;s full rally score. The score is not
-                split in half.
+                In the prelims, the team score is split in half:
+                each player on the team earns half of it. A 21-15
+                win gives each winner 10.5 points and each loser
+                7.5.
               </p>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
@@ -485,8 +484,8 @@ export default function TournamentFormatPage() {
                   </div>
                   <p className="mt-2 text-slate-300">
                     Played to 21. At 20-20, the next point is
-                    golden, so the game ends 21-20. Both players
-                    on a team receive the full team score.
+                    golden, so the game ends 21-20. Each player
+                    receives half of the team score.
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm">
@@ -811,11 +810,12 @@ export default function TournamentFormatPage() {
                 1. Random preliminary rounds
               </h2>
               <p className="mt-3 text-sm leading-6 text-slate-300">
-                All 20 players receive completely random partners and
-                opponents for five rounds. Both players on a team
-                receive that team&apos;s full rally score. Player rankings use
-                tournament points, then wins, point difference, and
-                points scored.
+                All five rounds are drawn before the first match, so
+                they can be played in parallel. Partners are random,
+                and the same two players partner at most twice. Each
+                player receives half of the team&apos;s rally score.
+                Player rankings use tournament points, then
+                wins, point difference, and points scored.
               </p>
               <p className="mt-3 text-sm text-slate-400">
                 Prelim games are first to 21 with a golden point at
